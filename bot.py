@@ -1,5 +1,4 @@
 import logging
-import sys
 from pyromod import Client
 from config import Config
 
@@ -32,7 +31,7 @@ class Bot(Client):
         await super().start()
         self.me = await self.get_me()
         logger.info(f"Bot @{self.me.username} logged in and started successfully.")
-        # Startup check removed as requested.
+        # Startup check has been removed in favor of the new interactive setup.
 
     async def stop(self, *args):
         await super().stop()
