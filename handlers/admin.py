@@ -5,7 +5,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 from database.db import (
     total_users_count, get_all_user_ids, get_storage_owners_count, 
-    get_normal_user_ids, delete_all_files, set_owner_db_channel
+    get_storage_owner_ids, get_normal_user_ids, delete_all_files, set_owner_db_channel
 )
 from features.broadcaster import broadcast_message
 from utils.helpers import go_back_button
@@ -75,9 +75,14 @@ async def broadcast_callback_handler(client, query):
         message_to_broadcast = await client.get_messages(chat_id=query.message.chat.id, message_ids=message_id)
         if not message_to_broadcast:
             return await query.message.edit_text("Error: Could not find the original message.")
-        if broadcast_type == "all": user_ids = await get_all_user_ids()
-        elif broadcast_type == "storage": user_ids = await get_storage_owner_ids()
-        else: user_ids = await get_normal_user_ids()
+        
+        if broadcast_type == "all":
+            user_ids = await get_all_user_ids()
+        elif broadcast_type == "storage":
+            user_ids = await get_storage_owner_ids()
+        else: # broadcast_type == "normal"
+            user_ids = await get_normal_user_ids()
+            
         status_msg = await query.message.edit_text(f"Broadcasting to {len(user_ids)} users...")
         success, fail = await broadcast_message(client, user_ids, message_to_broadcast)
         await status_msg.edit_text(f"✅ **Broadcast Complete**\n\nSent to: `{success}` users.\nFailed for: `{fail}` users.")
