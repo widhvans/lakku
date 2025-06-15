@@ -1,8 +1,7 @@
 import traceback
 import logging
-import time
 from pyrogram import Client, filters, enums
-from pyrogram.errors import UserNotParticipant
+from pyrogram.errors import UserNotParticipant, MessageNotModified
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import Config
 from database.db import add_user, get_file_by_raw_link, get_user, get_owner_db_channel
@@ -11,10 +10,8 @@ from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
-SHORTENER_TIMESTAMPS = {}
-SHORTENER_WAIT_TIME = 15
-
 async def send_file(client, user_id, raw_link):
+    """Helper function to send the final file."""
     try:
         file_data = await get_file_by_raw_link(raw_link)
         if not file_data:
@@ -29,7 +26,7 @@ async def send_file(client, user_id, raw_link):
             chat_id=user_id,
             from_chat_id=owner_db_id,
             message_id=file_data['file_id'],
-            caption=f"**File:** `{file_data.get('file_name', 'N/A')}`"
+            caption=f"✅ **Here is your file!**\n\n`{file_data.get('file_name', 'N/A')}`"
         )
     except Exception:
         logger.exception("Error in send_file function")
@@ -44,14 +41,20 @@ async def start_command(client, message):
     if len(message.command) > 1:
         payload = message.command[1]
         try:
+            # Final delivery step
             if payload.startswith("finalget_"):
-                await final_get_handler(client, message)
+                _, raw_link_encoded = payload.split("_", 1)
+                raw_link = decode_link(raw_link_encoded)
+                await send_file(client, user_id, raw_link)
+            
+            # First step (user clicks link in channel)
             elif payload.startswith("get_"):
                 await handle_file_request(client, message, user_id, payload)
         except Exception:
             logger.exception("Error processing deep link in /start")
             await message.reply_text("Something went wrong.")
     else:
+        # Regular /start command
         text = (
             f"Hello {message.from_user.mention}! 👋\n\n"
             "I am your personal **File Storage & Auto-Posting Bot**.\n\n"
@@ -63,10 +66,17 @@ async def start_command(client, message):
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Let's Go 🚀", callback_data=f"go_back_{user_id}")]]))
 
 async def handle_file_request(client, message, user_id, payload):
+    """Contains the logic for FSub check and showing the shortener link."""
     raw_link_encoded = payload.split("_", 1)[1]
     raw_link = decode_link(raw_link_encoded)
+    
+    # Add logging to see what link is being searched for
+    logger.info(f"[LINK_SEARCH] User {user_id} is searching for raw_link: {raw_link}")
+    
     file_data = await get_file_by_raw_link(raw_link)
-    if not file_data: return await message.reply_text("File not found.")
+    if not file_data:
+        logger.warning(f"[LINK_SEARCH] File not found in DB for raw_link: {raw_link}")
+        return await message.reply_text("File not found or link has expired.")
 
     owner_id = file_data['owner_id']
     owner_settings = await get_user(owner_id)
@@ -81,6 +91,7 @@ async def handle_file_request(client, message, user_id, payload):
             buttons = [[InlineKeyboardButton("📢 Join Channel", url=invite_link)], [InlineKeyboardButton("🔄 Retry", callback_data=f"retry_{payload}")]]
             return await message.reply_text("You must join the channel to continue.", reply_markup=InlineKeyboardMarkup(buttons))
     
+    # If FSub is passed, show the shortener link
     final_delivery_link = f"https://t.me/{client.me.username}?start=finalget_{raw_link_encoded}"
     shortened_link = await get_shortlink(final_delivery_link, owner_id)
     
@@ -90,22 +101,17 @@ async def handle_file_request(client, message, user_id, payload):
 
     await message.reply_text(
         "**Your file is almost ready!**\n\n"
-        "1. Click the button below to complete the task.\n"
-        "2. You will be automatically redirected back and I will send you the file.",
+        "1. Click the button above to complete the task.\n"
+        "2. You will be automatically redirected back, and I will send you the file.",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
-
-async def final_get_handler(client, message):
-    user_id = message.from_user.id
-    raw_link_encoded = message.command[1].split("_", 1)[1]
-    raw_link = decode_link(raw_link_encoded)
-    await send_file(client, user_id, raw_link)
 
 @Client.on_callback_query(filters.regex(r"^retry_"))
 async def retry_handler(client, query):
     user_id = query.from_user.id
     payload = query.data.split("_", 1)[1]
     await query.message.delete()
+    # Re-run the file request logic after user clicks retry
     await handle_file_request(client, query.message, user_id, payload)
 
 @Client.on_callback_query(filters.regex(r"go_back_"))
@@ -116,3 +122,5 @@ async def go_back_callback(client, query):
         await query.message.edit_text("⚙️ Here are the main settings:", reply_markup=await get_main_menu(user_id))
     except MessageNotModified:
         await query.answer()
+    except Exception as e:
+        logger.exception("Error in go_back_callback")
