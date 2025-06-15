@@ -13,6 +13,7 @@ async def get_main_menu(user_id):
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
     
+    # --- Corrected button layout with "How to Download" added back ---
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
@@ -43,6 +44,7 @@ async def get_main_menu(user_id):
 def go_back_button(user_id):
     return InlineKeyboardMarkup([[InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]])
 
+# (The rest of the helper functions are unchanged and correct)
 def format_bytes(size):
     if not isinstance(size, (int, float)): return "N/A"
     power = 1024; n = 0; power_labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
