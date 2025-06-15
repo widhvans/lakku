@@ -1,10 +1,10 @@
 import re
 import base64
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import Config
 from database.db import get_user
 from features.poster import get_poster
 from features.shortener import get_shortlink
-from config import Config
 
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
@@ -32,6 +32,7 @@ async def get_main_menu(user_id):
     ]
     
     if user_id == Config.ADMIN_ID:
+        buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
         
     return InlineKeyboardMarkup(buttons)
@@ -81,34 +82,25 @@ def decode_link(encoded_link: str) -> str:
 async def create_post(client, user_id, messages):
     user = await get_user(user_id)
     if not user: return None, None, None
-    
     bot_username = client.me.username
     title, year = clean_filename(getattr(messages[0], messages[0].media.value).file_name)
     caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
-    
     links = ""
     messages.sort(key=lambda m: getattr(m, m.media.value).file_name)
-    
     for msg in messages:
         media = getattr(msg, msg.media.value)
         link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
         raw_link = await get_file_raw_link(msg)
-        
-        # This now generates the un-shortened bot deep link
         payload = f"get_{encode_link(raw_link)}"
         bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
-        
-        links += f"📁 `{link_label}`\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
-        
+        short_link = await get_shortlink(bot_redirect_link, user_id)
+        links += f"📁 `{link_label}`\n\n[🔗 Click Here]({short_link})\n\n"
     custom_caption = f"\n{user.get('custom_caption', '')}" if user.get('custom_caption') else ""
     final_caption = f"{caption_header}\n\n{links}{custom_caption}"
-    
     post_poster = await get_poster(title, year) if user.get('show_poster', True) else None
-    
     footer_buttons_data = user.get('footer_buttons', [])
     footer_keyboard = None
     if footer_buttons_data:
         buttons = [[InlineKeyboardButton(btn['name'], url=btn['url'])] for btn in footer_buttons_data]
         footer_keyboard = InlineKeyboardMarkup(buttons)
-        
     return post_poster, final_caption, footer_keyboard
