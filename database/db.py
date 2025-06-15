@@ -1,6 +1,8 @@
+import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import Config
 
+logger = logging.getLogger(__name__)
 client = AsyncIOMotorClient(Config.MONGO_URI)
 db = client[Config.DATABASE_NAME]
 
@@ -8,37 +10,44 @@ users = db['users']
 files = db['files']
 bot_settings = db['bot_settings']
 
-# --- Functions to manage Owner DB Channel ---
 async def set_owner_db_channel(channel_id: int):
-    """Saves the Owner DB Channel ID to the database."""
-    await bot_settings.update_one(
-        {'_id': 'owner_db_config'},
-        {'$set': {'channel_id': channel_id}},
-        upsert=True
-    )
+    await bot_settings.update_one({'_id': 'owner_db_config'}, {'$set': {'channel_id': channel_id}}, upsert=True)
 
 async def get_owner_db_channel():
-    """Retrieves the Owner DB Channel ID from the database."""
     config = await bot_settings.find_one({'_id': 'owner_db_config'})
     return config.get('channel_id') if config else None
 
-# --- User Management ---
 async def add_user(user_id):
-    """Adds a new user to the database if they don't already exist."""
     user_data = {
-        'user_id': user_id,
-        'post_channels': [],
-        'db_channels': [],
-        'shortener_url': None,
-        'shortener_api': None,
-        'fsub_channel': None,
-        'custom_caption': None,
-        'footer_buttons': [],
-        'show_poster': True,
-        'shortener_enabled': True,
-        'how_to_download_link': None  # Field for the new feature
+        'user_id': user_id, 'post_channels': [], 'db_channels': [],
+        'shortener_url': None, 'shortener_api': None,
+        'fsub_channel': None, 'custom_caption': None, 'footer_buttons': [],
+        'show_poster': True, 'shortener_enabled': True, 'how_to_download_link': None
     }
     await users.update_one({'user_id': user_id}, {"$setOnInsert": user_data}, upsert=True)
+
+async def save_file_data(owner_id, original_message, copied_message):
+    """Saves file metadata to the database."""
+    from utils.helpers import get_file_raw_link
+    original_media = getattr(original_message, original_message.media.value)
+    
+    raw_link = await get_file_raw_link(copied_message)
+    
+    # --- NEW LOGGING ---
+    logger.info(f"[DB_SAVE] Saving file '{original_media.file_name}' with raw_link: {raw_link}")
+    
+    file_data = {
+        'owner_id': owner_id,
+        'file_unique_id': original_media.file_unique_id,
+        'file_id': copied_message.id,
+        'file_name': original_media.file_name,
+        'file_size': original_media.file_size,
+        'raw_link': raw_link
+    }
+    await files.update_one(
+        {'owner_id': owner_id, 'file_unique_id': original_media.file_unique_id},
+        {'$set': file_data}, upsert=True
+    )
 
 async def get_user(user_id):
     return await users.find_one({'user_id': user_id})
@@ -78,24 +87,6 @@ async def remove_from_list(user_id, list_name, item):
 async def find_owner_by_db_channel(channel_id):
     user = await users.find_one({'db_channels': channel_id})
     return user['user_id'] if user else None
-
-# --- File Management ---
-async def save_file_data(owner_id, original_message, copied_message):
-    from utils.helpers import get_file_raw_link
-    original_media = getattr(original_message, original_message.media.value)
-    raw_link = await get_file_raw_link(copied_message)
-    file_data = {
-        'owner_id': owner_id,
-        'file_unique_id': original_media.file_unique_id,
-        'file_id': copied_message.id,
-        'file_name': original_media.file_name,
-        'file_size': original_media.file_size,
-        'raw_link': raw_link
-    }
-    await files.update_one(
-        {'owner_id': owner_id, 'file_unique_id': original_media.file_unique_id},
-        {'$set': file_data}, upsert=True
-    )
 
 async def get_file_by_raw_link(link: str):
     return await files.find_one({'raw_link': link})
