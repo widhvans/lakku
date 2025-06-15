@@ -13,26 +13,29 @@ async def get_main_menu(user_id):
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
     
-    # --- FINAL, PROFESSIONAL BUTTON LAYOUT ---
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
         [
             InlineKeyboardButton(shortener_text, callback_data="shortener_menu"),
-            InlineKeyboardButton("✍️ Manage Caption", callback_data="caption_menu")
-        ],
-        [
-            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer"),
-            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu")
-        ],
-        [
-            InlineKeyboardButton("📂 My Files", callback_data="my_files_1"),
             InlineKeyboardButton("🔄 Backup Links", callback_data="backup_links")
         ],
-        [InlineKeyboardButton(fsub_text, callback_data="set_fsub")]
+        [
+            InlineKeyboardButton("✍️ Manage Caption", callback_data="caption_menu"),
+            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer")
+        ],
+        [
+            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu"),
+            InlineKeyboardButton("📂 My Files", callback_data="my_files_1")
+        ],
+        [
+            InlineKeyboardButton(fsub_text, callback_data="set_fsub"),
+            InlineKeyboardButton("❓ Set 'How to Download'", callback_data="set_download")
+        ]
     ]
     
     if user_id == Config.ADMIN_ID:
+        buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
         
     return InlineKeyboardMarkup(buttons)
@@ -40,7 +43,6 @@ async def get_main_menu(user_id):
 def go_back_button(user_id):
     return InlineKeyboardMarkup([[InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]])
 
-# (The rest of the helper functions are unchanged from the last version)
 def format_bytes(size):
     if not isinstance(size, (int, float)): return "N/A"
     power = 1024; n = 0; power_labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
