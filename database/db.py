@@ -1,19 +1,32 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import Config
 
-# This file defines the database functions, so it should not import from itself.
-# The incorrect "from database.db import ..." line has been removed.
-
 client = AsyncIOMotorClient(Config.MONGO_URI)
 db = client[Config.DATABASE_NAME]
 
 users = db['users']
 files = db['files']
+bot_settings = db['bot_settings'] # New collection for bot-wide settings
+
+# --- NEW: Functions to manage Owner DB Channel ---
+async def set_owner_db_channel(channel_id: int):
+    """Saves the Owner DB Channel ID to the database."""
+    await bot_settings.update_one(
+        {'_id': 'owner_db_config'},
+        {'$set': {'channel_id': channel_id}},
+        upsert=True
+    )
+
+async def get_owner_db_channel():
+    """Retrieves the Owner DB Channel ID from the database."""
+    config = await bot_settings.find_one({'_id': 'owner_db_config'})
+    return config.get('channel_id') if config else None
+# -----------------------------------------------
 
 async def add_user(user_id):
     user_data = {
         'user_id': user_id, 'post_channels': [], 'db_channels': [],
-        'shortener_url': None, 'shortener_api': None, 'footer_text': None,
+        'shortener_url': None, 'shortener_api': None,
         'fsub_channel': None, 'custom_caption': None, 'footer_buttons': [],
         'show_poster': True, 'shortener_enabled': True
     }
@@ -36,6 +49,11 @@ async def save_file_data(owner_id, original_message, copied_message):
         {'$set': file_data}, upsert=True
     )
 
+async def delete_all_files():
+    """Deletes all documents from the files collection for the admin reset feature."""
+    result = await files.delete_many({})
+    return result.deleted_count
+
 async def get_user(user_id):
     return await users.find_one({'user_id': user_id})
 
@@ -56,8 +74,7 @@ async def get_normal_user_ids():
     storage_owners_cursor = users.find({"$or": [{"post_channels": {"$exists": True, "$ne": []}}, {"db_channels": {"$exists": True, "$ne": []}}]}, {'user_id': 1})
     all_user_ids = {doc['user_id'] for doc in await all_users_cursor.to_list(length=None) if 'user_id' in doc}
     storage_owner_ids = {doc['user_id'] for doc in await storage_owners_cursor.to_list(length=None) if 'user_id' in doc}
-    normal_user_ids = all_user_ids - storage_owner_ids
-    return list(normal_user_ids)
+    return list(all_user_ids - storage_owner_ids)
 
 async def get_storage_owners_count():
     query = {"$or": [{"post_channels": {"$exists": True, "$ne": []}}, {"db_channels": {"$exists": True, "$ne": []}}]}
@@ -107,8 +124,3 @@ async def add_footer_button(user_id, button_name, button_url):
 
 async def remove_footer_button(user_id, button_name):
     await users.update_one({'user_id': user_id}, {'$pull': {'footer_buttons': {'name': button_name}}})
-
-async def delete_all_files():
-    """Deletes all documents from the files collection for the admin reset feature."""
-    result = await files.delete_many({})
-    return result.deleted_count
