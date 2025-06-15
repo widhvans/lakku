@@ -1,10 +1,14 @@
 import asyncio
 import re
 import logging
+import os
+import tempfile
+import shutil
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 from config import Config
-from database.db import get_user, save_file_data, find_owner_by_db_channel
+# --- FIX: Added get_owner_db_channel to the import list ---
+from database.db import get_user, save_file_data, find_owner_by_db_channel, get_owner_db_channel
 from utils.helpers import create_post
 
 logger = logging.getLogger(__name__)
@@ -24,9 +28,7 @@ def get_batch_key(filename: str):
 
 async def process_batch(client, user_id, batch_key):
     try:
-        # Near-instant posting with a very small buffer to catch simultaneous files
         await asyncio.sleep(2)
-        
         if user_id not in batch_locks or batch_key not in batch_locks[user_id]: return
         async with batch_locks[user_id][batch_key]:
             messages = file_batch[user_id].pop(batch_key, [])
@@ -77,32 +79,47 @@ async def new_file_handler(client, message):
                  await client.send_message(Config.ADMIN_ID, "⚠️ **Setup Incomplete:** Please set your Owner Database Channel in my settings so I can save files.")
             return
 
-        # --- NEW "SMART COPY" METHOD ---
-        # This is fast and removes the forward tag without slow downloads.
-        copied_message = await message.copy(chat_id=owner_db_channel_id)
-        
-        await save_file_data(
-            owner_id=user_id,
-            original_message=message, # Used for metadata
-            copied_message=copied_message # Used for the permanent link
-        )
-        # --- END OF NEW METHOD ---
-        
-        filename = media.file_name
-        batch_key = get_batch_key(filename)
-
-        if user_id not in batch_locks: batch_locks[user_id] = {}
-        if batch_key not in batch_locks[user_id]:
-            batch_locks[user_id][batch_key] = asyncio.Lock()
-            
-        async with batch_locks[user_id][batch_key]:
-            if batch_key not in file_batch.setdefault(user_id, {}):
-                file_batch[user_id][batch_key] = [copied_message]
-                asyncio.create_task(process_batch(client, user_id, batch_key))
-            else:
-                file_batch[user_id][batch_key].append(copied_message)
+        copied_message = None
+        try:
+            # Try the fast copy method first
+            copied_message = await message.copy(chat_id=owner_db_channel_id)
+        except Exception as e:
+            logger.warning(f"Fast copy failed: {e}. Falling back to download/upload method.")
+            # If fast copy fails, use the reliable download/upload method
+            temp_dir = tempfile.mkdtemp()
+            try:
+                temp_file_path = await client.download_media(message, file_name=os.path.join(temp_dir, media.file_name))
+                sent_message = await client.send_document(owner_db_channel_id, temp_file_path, force_document=True)
+                copied_message = sent_message
+            except Exception:
+                logger.exception("Both copy and download/upload methods failed for a file.")
+                return
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
                 
+        # If we have a successfully copied message (from either method), proceed
+        if copied_message:
+            await save_file_data(
+                owner_id=user_id,
+                original_message=message,
+                copied_message=copied_message
+            )
+            
+            filename = media.file_name
+            batch_key = get_batch_key(filename)
+
+            if user_id not in batch_locks: batch_locks[user_id] = {}
+            if batch_key not in batch_locks[user_id]:
+                batch_locks[user_id][batch_key] = asyncio.Lock()
+                
+            async with batch_locks[user_id][batch_key]:
+                if batch_key not in file_batch.setdefault(user_id, {}):
+                    file_batch[user_id][batch_key] = [copied_message]
+                    asyncio.create_task(process_batch(client, user_id, batch_key))
+                else:
+                    file_batch[user_id][batch_key].append(copied_message)
+
     except Exception as e:
         logger.exception("Error in new_file_handler")
-        # Notify the admin if the copy fails (usually due to a permissions issue)
-        await client.send_message(Config.ADMIN_ID, f"⚠️ **CRITICAL ERROR in File Saving**\n\nI failed to copy a file to the Owner Database.\n\n**Reason:** `{e}`\n\nPlease ensure I am still an admin in that channel.")
+        if "USER_IS_BLOCKED" in str(e).upper() or "PEER_ID_INVALID" in str(e).upper():
+             await client.send_message(Config.ADMIN_ID, "⚠️ **CRITICAL ERROR:** I could not access the Owner Database Channel. Please make sure I am still an admin there and use the 'Set Owner DB' button again.")
