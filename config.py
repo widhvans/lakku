@@ -10,5 +10,7 @@ class Config:
 
     # --- ADD YOUR MAIN, CENTRAL DATABASE CHANNEL ID HERE ---
     # The bot MUST be an admin in this channel.
-    OWNER_DATABASE_CHANNEL = int(os.environ.get("OWNER_DATABASE_CHANNEL", -1002832802347)) # e.g., -100123456789
-    DUMMY_LINK = os.environ.get("DUMMY_LINK", "https://t.me/widhvans")
+    OWNER_DATABASE_CHANNEL = int(os.environ.get("OWNER_DATABASE_CHANNEL", -1002832802347)) # Replace 0 with your channel ID
+
+    # A default link for your shortener to use in the bot's PM.
+    SHORTENER_AD_LINK = os.environ.get("SHORTENER_AD_LINK", "https://google.com")
