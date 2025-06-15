@@ -9,7 +9,7 @@ from database.db import (
     get_user_file_count, add_footer_button, remove_footer_button, 
     get_all_user_files, get_paginated_files, search_user_files
 )
-from utils.helpers import go_back_button, get_main_menu, create_post, encode_link
+from utils.helpers import go_back_button, get_main_menu, create_post
 from handlers.new_post import get_batch_key
 
 logger = logging.getLogger(__name__)
@@ -123,11 +123,13 @@ async def my_files_handler(client, query):
     try:
         user_id = query.from_user.id
         page = int(query.data.split("_")[-1])
+        
         total_files = await get_user_file_count(user_id)
         files_per_page = 5
-        bot_username = client.me.username
         
+        bot_username = client.me.username
         text = f"**📂 Your Saved Files ({total_files} Total)**\n\n"
+        
         if total_files == 0:
             text += "You have not saved any files yet."
         else:
@@ -139,7 +141,7 @@ async def my_files_handler(client, query):
                     payload = f"get_{encode_link(file['raw_link'])}"
                     deep_link = f"https://t.me/{bot_username}?start={payload}"
                     text += f"**File:** `{file['file_name']}`\n**Link:** [Click Here to Get File]({deep_link})\n\n"
-        
+                
         buttons, nav_row = [], []
         if page > 1:
             nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"my_files_{page-1}"))
@@ -159,6 +161,7 @@ async def _format_and_send_search_results(client, query, user_id, search_query, 
     files_list, total_files = await search_user_files(user_id, search_query, page, files_per_page)
     bot_username = client.me.username
     text = f"**🔎 Search Results for `{search_query}` ({total_files} Found)**\n\n"
+
     if not files_list:
         text += "No files found for your query."
     else:
@@ -166,9 +169,11 @@ async def _format_and_send_search_results(client, query, user_id, search_query, 
             payload = f"get_{encode_link(file['raw_link'])}"
             deep_link = f"https://t.me/{bot_username}?start={payload}"
             text += f"**File:** `{file['file_name']}`\n**Link:** [Click Here to Get File]({deep_link})\n\n"
+
     buttons = []
     nav_row = []
     encoded_query = base64.urlsafe_b64encode(search_query.encode()).decode().strip("=")
+
     if page > 1:
         nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"search_results_{page-1}_{encoded_query}"))
     if total_files > page * files_per_page:
@@ -176,6 +181,7 @@ async def _format_and_send_search_results(client, query, user_id, search_query, 
     if nav_row: buttons.append(nav_row)
     buttons.append([InlineKeyboardButton("📚 Back to Full List", callback_data="my_files_1")])
     buttons.append([InlineKeyboardButton("« Go Back to Settings", callback_data=f"go_back_{user_id}")])
+    
     await safe_edit_message(query, text=text, reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
 
 @Client.on_callback_query(filters.regex("search_my_files"))
@@ -188,8 +194,10 @@ async def search_my_files_prompt(client, query):
         )
         response = await client.listen(chat_id=user_id, timeout=300, filters=filters.text)
         search_query = response.text
+        
         await response.delete()
         await _format_and_send_search_results(client, query, user_id, search_query, 1)
+
     except asyncio.TimeoutError:
         await safe_edit_message(query, text="❗️ **Timeout:** Search cancelled.", reply_markup=go_back_button(user_id))
     except Exception as e:
@@ -400,27 +408,35 @@ async def show_caption_handler(client, query):
     caption = user.get('custom_caption', 'No custom caption set.')
     await query.answer(caption, show_alert=True, cache_time=0)
 
-@Client.on_callback_query(filters.regex(r"^(set_caption|set_fsub)$"))
+@Client.on_callback_query(filters.regex(r"^(set_caption|set_fsub|set_download)$"))
 async def set_value_handler(client, query):
     user_id = query.from_user.id
-    action = query.data
+    action = query.data.split('_', 1)[1]
+    
     prompts = {
-        "set_caption": ("✍️ **Set Caption**\n\nSend your caption text.", "custom_caption"),
-        "set_fsub": ("📢 **Set FSub**\n\nForward a message from your FSub channel.", "fsub_channel")
+        "caption": ("✍️ **Set Caption**\n\nSend your caption text.", "custom_caption"),
+        "fsub": ("📢 **Set FSub**\n\nForward a message from your FSub channel.", "fsub_channel"),
+        "download": ("❓ **Set 'How to Download'**\n\nSend your tutorial URL.", "how_to_download_link")
     }
     prompt_text, key = prompts[action]
+    
     question = None
     try:
         question = await query.message.edit_text(prompt_text, reply_markup=go_back_button(user_id))
-        listen_filter = filters.forwarded if action == "set_fsub" else filters.text
+        listen_filter = filters.forwarded if action == "fsub" else filters.text
         response = await client.listen(chat_id=user_id, timeout=300, filters=listen_filter)
         
-        if action == "set_fsub":
+        value = None
+        if action == "fsub":
             if not response.forward_from_chat: return await response.reply("Not a valid forwarded message.", reply_markup=go_back_button(user_id))
-            await update_user(user_id, key, response.forward_from_chat.id)
-        else:
-            await update_user(user_id, key, response.text)
+            value = response.forward_from_chat.id
+        elif action == "download":
+            if not response.text.startswith(("http://", "https://")): return await response.reply("Invalid URL.", reply_markup=go_back_button(user_id))
+            value = response.text
+        else: # caption
+            value = response.text
         
+        await update_user(user_id, key, value)
         await response.reply("✅ Settings updated!", reply_markup=go_back_button(user_id))
         await question.delete()
     except asyncio.TimeoutError:
@@ -434,25 +450,18 @@ async def set_shortener_handler(client, query):
     try:
         domain_prompt = await query.message.edit_text(
             "**🔗 Step 1/2: Set Domain**\n\nSend your shortener domain (e.g., `earn4link.in`).",
-            reply_markup=go_back_button(user_id)
-        )
+            reply_markup=go_back_button(user_id))
         domain_msg = await client.listen(chat_id=user_id, timeout=300, filters=filters.text)
-        
         await domain_prompt.edit_text(
             f"**🔗 Step 2/2: Set API Key**\n\nDomain: `{domain_msg.text}`\nNow, send your API key.",
-            reply_markup=go_back_button(user_id)
-        )
+            reply_markup=go_back_button(user_id))
         api_msg = await client.listen(chat_id=user_id, timeout=300, filters=filters.text)
-
         await update_user(user_id, "shortener_url", domain_msg.text.strip())
         await update_user(user_id, "shortener_api", api_msg.text.strip())
-        
         await domain_msg.delete()
         await api_msg.delete()
-        
         text, markup = await get_shortener_menu_parts(user_id)
         await safe_edit_message(query, text=text, reply_markup=markup)
-
     except asyncio.TimeoutError:
         await safe_edit_message(query, text="❗️ **Timeout:** Command cancelled.", reply_markup=go_back_button(user_id))
     except Exception as e:
