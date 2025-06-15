@@ -12,10 +12,8 @@ logger = logging.getLogger(__name__)
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
     if not user_settings: return InlineKeyboardMarkup([])
-
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
-    
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
@@ -34,11 +32,9 @@ async def get_main_menu(user_id):
         [InlineKeyboardButton(fsub_text, callback_data="set_fsub")],
         [InlineKeyboardButton("❓ How to Download", callback_data="set_download")]
     ]
-    
     if user_id == Config.ADMIN_ID:
         buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
-        
     return InlineKeyboardMarkup(buttons)
 
 def go_back_button(user_id):
@@ -63,11 +59,7 @@ def clean_filename(name: str):
     year = year_match.group(0) if year_match else None
     if year: cleaned_name = cleaned_name.split(year)[0]
     cleaned_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', cleaned_name)
-    tags_to_remove = [
-        '1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL',
-        'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs',
-        r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+'
-    ]
+    tags_to_remove = ['1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL', 'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs', r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+']
     for tag in tags_to_remove:
         cleaned_name = re.sub(r'\b' + tag + r'\b', '', cleaned_name, flags=re.I)
     final_title = re.sub(r'\s+', ' ', cleaned_name).strip()
@@ -75,47 +67,41 @@ def clean_filename(name: str):
         final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
     return (f"{final_title} {year}".strip() if year else final_title), year
 
-def encode_link(link: str) -> str:
-    return base64.urlsafe_b64encode(link.encode()).decode().strip("=")
+def encode_link(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode()).decode().strip("=")
 
-def decode_link(encoded_link: str) -> str:
-    padding = 4 - (len(encoded_link) % 4)
-    encoded_link += "=" * padding
-    return base64.urlsafe_b64decode(encoded_link).decode()
+def decode_link(encoded_text: str) -> str:
+    padding = 4 - (len(encoded_text) % 4)
+    encoded_text += "=" * padding
+    return base64.urlsafe_b64decode(encoded_text).decode()
 
 async def create_post(client, user_id, messages):
     user = await get_user(user_id)
     if not user: return None, None, None
-    
     bot_username = client.me.username
     title, year = clean_filename(getattr(messages[0], messages[0].media.value).file_name)
     caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
-    
     links = ""
     messages.sort(key=lambda m: getattr(m, m.media.value).file_name)
-    
     for msg in messages:
         media = getattr(msg, msg.media.value)
         link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
-        raw_link = await get_file_raw_link(msg)
         
-        # Add logging to see which link is being used for the post
-        logger.info(f"[POST_CREATE] Generating post with raw_link: {raw_link}")
+        # --- Using the permanent file_unique_id for the payload ---
+        file_unique_id = media.file_unique_id
+        logger.info(f"[POST_CREATE] Generating post link with file_unique_id: {file_unique_id}")
         
-        payload = f"get_{encode_link(raw_link)}"
+        payload = f"get_{file_unique_id}" # No encoding needed for file_unique_id
         bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
         
         links += f"📁 `{link_label}`\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
         
     custom_caption = f"\n{user.get('custom_caption', '')}" if user.get('custom_caption') else ""
     final_caption = f"{caption_header}\n\n{links}{custom_caption}"
-    
     post_poster = await get_poster(title, year) if user.get('show_poster', True) else None
-    
     footer_buttons_data = user.get('footer_buttons', [])
     footer_keyboard = None
     if footer_buttons_data:
         buttons = [[InlineKeyboardButton(btn['name'], url=btn['url'])] for btn in footer_buttons_data]
         footer_keyboard = InlineKeyboardMarkup(buttons)
-        
     return post_poster, final_caption, footer_keyboard
