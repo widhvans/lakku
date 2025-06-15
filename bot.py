@@ -3,9 +3,9 @@ import sys
 import asyncio
 from pyromod import Client
 from config import Config
-from database.db import get_user, save_file_data, find_owner_by_db_channel, get_owner_db_channel
+from database.db import get_user, save_file_data, get_owner_db_channel
 from utils.helpers import create_post
-from handlers.new_post import get_batch_key # Import the batching logic
+from handlers.new_post import get_batch_key # Import from handlers
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -22,7 +22,7 @@ class Bot(Client):
             plugins=dict(root="handlers")
         )
         self.me = None
-        # --- NEW: The file processing queue and batch dictionary ---
+        # --- The file processing queue and batch dictionary ---
         self.file_queue = asyncio.Queue()
         self.file_batch = {}
         self.batch_locks = {}
@@ -32,12 +32,11 @@ class Bot(Client):
         logger.info("File processor worker started.")
         while True:
             try:
-                # Get a message from the queue to process
                 message_to_process, user_id = await self.file_queue.get()
                 
                 owner_db_id = await get_owner_db_channel()
                 if not owner_db_id:
-                    logger.error("Owner DB not set. Worker is sleeping.")
+                    logger.error("Owner DB not set. Worker is sleeping for 60s.")
                     await asyncio.sleep(60)
                     continue
 
@@ -58,7 +57,6 @@ class Bot(Client):
                 async with self.batch_locks[user_id][batch_key]:
                     if batch_key not in self.file_batch.setdefault(user_id, {}):
                         self.file_batch[user_id][batch_key] = [copied_message]
-                        # Start the timer for this new batch
                         asyncio.create_task(self.process_batch_task(user_id, batch_key))
                     else:
                         self.file_batch[user_id][batch_key].append(copied_message)
@@ -74,20 +72,19 @@ class Bot(Client):
     async def process_batch_task(self, user_id, batch_key):
         """The task that waits and posts a batch of files."""
         try:
-            await asyncio.sleep(10) # Wait for more files in the batch
-            if user_id not in self.batch_locks or batch_key not in self.batch_locks[user_id]: return
+            await asyncio.sleep(10)
+            if user_id not in self.batch_locks or batch_key not in self.batch_locks.get(user_id, {}): return
             async with self.batch_locks[user_id][batch_key]:
                 messages = self.file_batch[user_id].pop(batch_key, [])
                 if not messages: return
                 
                 user = await get_user(user_id)
-                post_channels = user.get('post_channels', [])
-                if not post_channels: return
+                if not user or not user.get('post_channels'): return
 
                 poster, caption, footer_keyboard = await create_post(self, user_id, messages)
                 if not caption: return
 
-                for channel_id in post_channels:
+                for channel_id in user.get('post_channels', []):
                     try:
                         if poster:
                             await self.send_photo(channel_id, photo=poster, caption=caption, reply_markup=footer_keyboard)
@@ -98,7 +95,6 @@ class Bot(Client):
         except Exception:
             logger.exception(f"An error occurred in process_batch_task for user {user_id}")
         finally:
-            # Cleanup
             if user_id in self.batch_locks and batch_key in self.batch_locks.get(user_id, {}): del self.batch_locks[user_id][batch_key]
             if user_id in self.file_batch and not self.file_batch.get(user_id, {}): del self.file_batch[user_id]
             if user_id in self.batch_locks and not self.batch_locks.get(user_id, {}): del self.batch_locks[user_id]
