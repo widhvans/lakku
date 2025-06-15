@@ -13,10 +13,12 @@ async def get_main_menu(user_id):
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
     
-    # --- Corrected button layout with "How to Download" added back ---
+    # --- FINAL, RE-ARRANGED BUTTON LAYOUT ---
     buttons = [
-        [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
-        [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
+        [
+            InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch"),
+            InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")
+        ],
         [
             InlineKeyboardButton(shortener_text, callback_data="shortener_menu"),
             InlineKeyboardButton("🔄 Backup Links", callback_data="backup_links")
@@ -29,10 +31,8 @@ async def get_main_menu(user_id):
             InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu"),
             InlineKeyboardButton("📂 My Files", callback_data="my_files_1")
         ],
-        [
-            InlineKeyboardButton(fsub_text, callback_data="set_fsub"),
-            InlineKeyboardButton("❓ Set 'How to Download'", callback_data="set_download")
-        ]
+        [InlineKeyboardButton(fsub_text, callback_data="set_fsub")],
+        [InlineKeyboardButton("❓ How to Download", callback_data="set_download")]
     ]
     
     if user_id == Config.ADMIN_ID:
