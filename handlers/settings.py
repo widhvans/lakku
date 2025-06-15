@@ -9,7 +9,7 @@ from database.db import (
     get_user_file_count, add_footer_button, remove_footer_button, 
     get_all_user_files, get_paginated_files, search_user_files
 )
-from utils.helpers import go_back_button, get_main_menu, create_post
+from utils.helpers import go_back_button, get_main_menu, create_post, encode_link
 from handlers.new_post import get_batch_key
 
 logger = logging.getLogger(__name__)
@@ -196,6 +196,8 @@ async def search_my_files_prompt(client, query):
         search_query = response.text
         
         await response.delete()
+        
+        # This will edit the original prompt message to show the results
         await _format_and_send_search_results(client, query, user_id, search_query, 1)
 
     except asyncio.TimeoutError:
@@ -242,7 +244,7 @@ async def backup_links_handler(client, query):
 async def start_backup_process(client, query):
     user_id = query.from_user.id
     if user_id in ACTIVE_BACKUP_TASKS:
-        return await query.answer("A backup process is already running.", show_alert=True)
+        return await query.answer("A backup process is already running for you.", show_alert=True)
     channel_id = int(query.data.split("_")[-1])
     ACTIVE_BACKUP_TASKS.add(user_id)
     try:
@@ -273,13 +275,19 @@ async def start_backup_process(client, query):
                 else: await client.send_message(channel_id, caption, reply_markup=footer, disable_web_page_preview=True)
                 
                 progress_text = f"🔄 `Step 3/3:` Progress: {i + 1} / {total_batches} posts created."
-                await safe_edit_message(query, text=progress_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel Backup", callback_data=f"cancel_backup_{user_id}")]]))
+                try:
+                    await progress_msg.edit_text(progress_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel Backup", callback_data=f"cancel_backup_{user_id}")]]))
+                except MessageNotModified:
+                    pass
+                except Exception as e:
+                    logger.warning(f"Could not edit backup progress message: {e}")
+                
                 await asyncio.sleep(3)
             except Exception as e:
                 logger.exception(f"Failed to post batch '{batch_key}' during backup.")
                 await client.send_message(user_id, f"Failed to post batch for `{batch_key}`. Error: {e}")
         
-        await query.message.delete()
+        await progress_msg.delete()
         await client.send_message(user_id, "✅ **Backup Complete!** All posts have been created.", reply_markup=go_back_button(user_id))
 
     except Exception as e:
@@ -412,20 +420,17 @@ async def show_caption_handler(client, query):
 async def set_value_handler(client, query):
     user_id = query.from_user.id
     action = query.data.split('_', 1)[1]
-    
     prompts = {
         "caption": ("✍️ **Set Caption**\n\nSend your caption text.", "custom_caption"),
         "fsub": ("📢 **Set FSub**\n\nForward a message from your FSub channel.", "fsub_channel"),
         "download": ("❓ **Set 'How to Download'**\n\nSend your tutorial URL.", "how_to_download_link")
     }
     prompt_text, key = prompts[action]
-    
     question = None
     try:
         question = await query.message.edit_text(prompt_text, reply_markup=go_back_button(user_id))
         listen_filter = filters.forwarded if action == "fsub" else filters.text
         response = await client.listen(chat_id=user_id, timeout=300, filters=listen_filter)
-        
         value = None
         if action == "fsub":
             if not response.forward_from_chat: return await response.reply("Not a valid forwarded message.", reply_markup=go_back_button(user_id))
@@ -435,7 +440,6 @@ async def set_value_handler(client, query):
             value = response.text
         else: # caption
             value = response.text
-        
         await update_user(user_id, key, value)
         await response.reply("✅ Settings updated!", reply_markup=go_back_button(user_id))
         await question.delete()
