@@ -1,5 +1,6 @@
 import traceback
 import logging
+import time
 from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,14 +11,15 @@ from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
+SHORTENER_TIMESTAMPS = {}
+SHORTENER_WAIT_TIME = 15
+
 async def send_file(client, user_id, raw_link):
-    """Helper function to send the final file."""
     try:
         file_data = await get_file_by_raw_link(raw_link)
         if not file_data:
             return await client.send_message(user_id, "Sorry, this file is no longer available.")
         
-        # FIX: Get the Owner DB ID from the database
         owner_db_id = await get_owner_db_channel()
         if not owner_db_id:
             logger.error("Owner DB Channel not set, cannot send file.")
@@ -27,7 +29,7 @@ async def send_file(client, user_id, raw_link):
             chat_id=user_id,
             from_chat_id=owner_db_id,
             message_id=file_data['file_id'],
-            caption=f"✅ **Here is your file!**\n\n`{file_data.get('file_name', 'N/A')}`"
+            caption=f"**File:** `{file_data.get('file_name', 'N/A')}`"
         )
     except Exception:
         logger.exception("Error in send_file function")
@@ -39,25 +41,17 @@ async def start_command(client, message):
     user_id = message.from_user.id
     await add_user(user_id)
     
-    # Check for deep link payload
     if len(message.command) > 1:
         payload = message.command[1]
         try:
-            # This is the final step: user is redirected back from the shortener
             if payload.startswith("finalget_"):
-                _, raw_link_encoded = payload.split("_", 1)
-                raw_link = decode_link(raw_link_encoded)
-                await send_file(client, user_id, raw_link)
-
-            # This is the first step: user clicks the link in the channel
+                await final_get_handler(client, message)
             elif payload.startswith("get_"):
                 await handle_file_request(client, message, user_id, payload)
-                
         except Exception:
             logger.exception("Error processing deep link in /start")
             await message.reply_text("Something went wrong.")
     else:
-        # Regular /start command for new users
         text = (
             f"Hello {message.from_user.mention}! 👋\n\n"
             "I am your personal **File Storage & Auto-Posting Bot**.\n\n"
@@ -69,8 +63,7 @@ async def start_command(client, message):
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Let's Go 🚀", callback_data=f"go_back_{user_id}")]]))
 
 async def handle_file_request(client, message, user_id, payload):
-    """Contains the logic for FSub check and showing the shortener link."""
-    _, raw_link_encoded = payload.split("_", 1)
+    raw_link_encoded = payload.split("_", 1)[1]
     raw_link = decode_link(raw_link_encoded)
     file_data = await get_file_by_raw_link(raw_link)
     if not file_data: return await message.reply_text("File not found.")
@@ -88,15 +81,9 @@ async def handle_file_request(client, message, user_id, payload):
             buttons = [[InlineKeyboardButton("📢 Join Channel", url=invite_link)], [InlineKeyboardButton("🔄 Retry", callback_data=f"retry_{payload}")]]
             return await message.reply_text("You must join the channel to continue.", reply_markup=InlineKeyboardMarkup(buttons))
     
-    # --- NEW AUTOMATIC DELIVERY LOGIC ---
-    # 1. Create a new "final delivery" deep link
-    final_payload = f"finalget_{raw_link_encoded}"
-    final_delivery_link = f"https://t.me/{client.me.username}?start={final_payload}"
-
-    # 2. Shorten the final delivery link
+    final_delivery_link = f"https://t.me/{client.me.username}?start=finalget_{raw_link_encoded}"
     shortened_link = await get_shortlink(final_delivery_link, owner_id)
     
-    # 3. Create the buttons
     buttons = [[InlineKeyboardButton("➡️ Click Here to Get Your File ⬅️", url=shortened_link)]]
     if owner_settings.get("how_to_download_link"):
         buttons.append([InlineKeyboardButton("❓ How to Download", url=owner_settings["how_to_download_link"])])
@@ -107,6 +94,12 @@ async def handle_file_request(client, message, user_id, payload):
         "2. You will be automatically redirected back and I will send you the file.",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
+
+async def final_get_handler(client, message):
+    user_id = message.from_user.id
+    raw_link_encoded = message.command[1].split("_", 1)[1]
+    raw_link = decode_link(raw_link_encoded)
+    await send_file(client, user_id, raw_link)
 
 @Client.on_callback_query(filters.regex(r"^retry_"))
 async def retry_handler(client, query):
