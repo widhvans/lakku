@@ -9,14 +9,19 @@ from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
+# --- NEW: Natural Sort Key Function ---
+def natural_sort_key(s):
+    """
+    Create a key for natural sorting.
+    Example: "file10.txt" comes after "file2.txt".
+    """
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'([0-9]+)', s)]
+
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
     if not user_settings: return InlineKeyboardMarkup([])
-
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
-    
-    # Final button layout: 1x1x2x2x2x1x1
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
@@ -35,11 +40,9 @@ async def get_main_menu(user_id):
         [InlineKeyboardButton(fsub_text, callback_data="set_fsub")],
         [InlineKeyboardButton("❓ How to Download", callback_data="set_download")]
     ]
-    
     if user_id == Config.ADMIN_ID:
         buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
-        
     return InlineKeyboardMarkup(buttons)
 
 def go_back_button(user_id):
@@ -56,28 +59,24 @@ async def get_file_raw_link(message):
     return f"https://t.me/c/{str(message.chat.id).replace('-100', '')}/{message.id}"
 
 def clean_filename(name: str):
-    """A very aggressive function to get the clean movie/show title and year."""
     if not name: return "Untitled", None
-    
     name = re.sub(r'\[@.*?\]', '', name)
     cleaned_name = re.sub(r'\.\w+$', '', name)
     cleaned_name = re.sub(r'[\._]', ' ', cleaned_name)
-    
     year_match = re.search(r'\b(19|20)\d{2}\b', cleaned_name)
     year = year_match.group(0) if year_match else None
-    
     if year: cleaned_name = cleaned_name.split(year)[0]
-    
     cleaned_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', cleaned_name)
-    
-    tags_pattern = r'\b(1080p|720p|480p|2160p|4k|HD|FHD|UHD|BluRay|WEBRip|WEB-DL|HDRip|x264|x265|HEVC|AAC|Dual[ -]?Audio|Hindi|English|Esubs|S\d+E\d+|S\d+|Season\s?\d+|Part\s?\d+|E\d+|EP\d+)\b'
-    cleaned_name = re.sub(tags_pattern, '', cleaned_name, flags=re.I)
-    
+    tags_to_remove = [
+        '1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL',
+        'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs',
+        r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+'
+    ]
+    for tag in tags_to_remove:
+        cleaned_name = re.sub(r'\b' + tag + r'\b', '', cleaned_name, flags=re.I)
     final_title = re.sub(r'\s+', ' ', cleaned_name).strip()
-    
     if not final_title:
         final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
-
     return (f"{final_title} {year}".strip() if year else final_title), year
 
 def encode_link(text: str) -> str:
@@ -97,7 +96,9 @@ async def create_post(client, user_id, messages):
     caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
     
     links = ""
-    messages.sort(key=lambda m: getattr(m, m.media.value).file_name)
+    
+    # --- NEW: Use natural sorting for perfect episode/part ordering ---
+    messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
     
     for msg in messages:
         media = getattr(msg, msg.media.value)
