@@ -13,44 +13,44 @@ async def get_main_menu(user_id):
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
     
+    # --- FINAL, PROFESSIONAL BUTTON LAYOUT ---
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
         [
             InlineKeyboardButton(shortener_text, callback_data="shortener_menu"),
+            InlineKeyboardButton("✍️ Manage Caption", callback_data="caption_menu")
+        ],
+        [
+            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer"),
+            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu")
+        ],
+        [
+            InlineKeyboardButton("📂 My Files", callback_data="my_files_1"),
             InlineKeyboardButton("🔄 Backup Links", callback_data="backup_links")
         ],
-        [
-            InlineKeyboardButton("✍️ Manage Caption", callback_data="caption_menu"),
-            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer")
-        ],
-        [
-            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu"),
-            InlineKeyboardButton("📂 My Files", callback_data="my_files_1")
-        ],
-        [
-            InlineKeyboardButton(fsub_text, callback_data="set_fsub"),
-            InlineKeyboardButton("❓ Set 'How to Download'", callback_data="set_download") # New Button
-        ]
+        [InlineKeyboardButton(fsub_text, callback_data="set_fsub")]
     ]
     
     if user_id == Config.ADMIN_ID:
-        buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
         
     return InlineKeyboardMarkup(buttons)
 
-# (The rest of the file is unchanged)
 def go_back_button(user_id):
     return InlineKeyboardMarkup([[InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]])
+
+# (The rest of the helper functions are unchanged from the last version)
 def format_bytes(size):
     if not isinstance(size, (int, float)): return "N/A"
     power = 1024; n = 0; power_labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
     while size >= power and n < len(power_labels) - 1 :
         size /= power; n += 1
     return f"{size:.2f} {power_labels[n]}"
+
 async def get_file_raw_link(message):
     return f"https://t.me/c/{str(message.chat.id).replace('-100', '')}/{message.id}"
+
 def clean_filename(name: str):
     if not name: return "Untitled", None
     name = re.sub(r'\[@.*?\]', '', name)
@@ -60,19 +60,26 @@ def clean_filename(name: str):
     year = year_match.group(0) if year_match else None
     if year: cleaned_name = cleaned_name.split(year)[0]
     cleaned_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', cleaned_name)
-    tags_to_remove = ['1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL', 'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs', r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+']
+    tags_to_remove = [
+        '1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL',
+        'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs',
+        r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+'
+    ]
     for tag in tags_to_remove:
         cleaned_name = re.sub(r'\b' + tag + r'\b', '', cleaned_name, flags=re.I)
     final_title = re.sub(r'\s+', ' ', cleaned_name).strip()
     if not final_title:
         final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
     return (f"{final_title} {year}".strip() if year else final_title), year
+
 def encode_link(link: str) -> str:
     return base64.urlsafe_b64encode(link.encode()).decode().strip("=")
+
 def decode_link(encoded_link: str) -> str:
     padding = 4 - (len(encoded_link) % 4)
     encoded_link += "=" * padding
     return base64.urlsafe_b64decode(encoded_link).decode()
+
 async def create_post(client, user_id, messages):
     user = await get_user(user_id)
     if not user: return None, None, None
