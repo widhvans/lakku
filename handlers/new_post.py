@@ -6,7 +6,6 @@ import tempfile
 import shutil
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
-from config import Config
 from database.db import get_user, save_file_data, find_owner_by_db_channel
 from utils.helpers import create_post
 
@@ -26,21 +25,17 @@ def get_batch_key(filename: str):
     return re.sub(r'\s+', ' ', base_name).lower()
 
 async def process_batch(client, user_id, batch_key):
+    # (This function is unchanged from the last working version)
     try:
-        # INSTANT POSTING: Wait for just 2 seconds to catch files sent in rapid succession
         await asyncio.sleep(2)
-        
         if user_id not in batch_locks or batch_key not in batch_locks[user_id]: return
         async with batch_locks[user_id][batch_key]:
             messages = file_batch[user_id].pop(batch_key, [])
             if not messages: return
-            
             user = await get_user(user_id)
             post_channels = user.get('post_channels', [])
             if not post_channels: return
-
             poster, caption, footer_keyboard = await create_post(client, user_id, messages)
-            
             if caption:
                 for channel_id in post_channels:
                     try:
@@ -54,14 +49,9 @@ async def process_batch(client, user_id, batch_key):
     except Exception:
         logger.exception(f"An error occurred in process_batch for user {user_id}")
     finally:
-        # Cleanup
-        if user_id in batch_locks and batch_key in batch_locks.get(user_id, {}):
-            del batch_locks[user_id][batch_key]
-        if user_id in file_batch and not file_batch.get(user_id, {}):
-            del file_batch[user_id]
-        if user_id in batch_locks and not batch_locks.get(user_id, {}):
-            del batch_locks[user_id]
-
+        if user_id in batch_locks and batch_key in batch_locks.get(user_id, {}): del batch_locks[user_id][batch_key]
+        if user_id in file_batch and not file_batch.get(user_id, {}): del file_batch[user_id]
+        if user_id in batch_locks and not batch_locks.get(user_id, {}): del batch_locks[user_id]
 
 @Client.on_message(filters.channel & (filters.document | filters.video | filters.audio), group=2)
 async def new_file_handler(client, message):
@@ -75,7 +65,8 @@ async def new_file_handler(client, message):
     try:
         temp_file_path = await client.download_media(message, file_name=os.path.join(temp_dir, media.file_name))
         
-        sent_message = await client.send_document(Config.OWNER_DATABASE_CHANNEL, temp_file_path, force_document=True)
+        # --- FIX: Use the channel ID learned at startup ---
+        sent_message = await client.send_document(client.owner_db_channel_id, temp_file_path, force_document=True)
         
         await save_file_data(owner_id=user_id, original_message=message, copied_message=sent_message)
         
