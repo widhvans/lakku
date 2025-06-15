@@ -1,8 +1,12 @@
 import asyncio
 import re
 import logging
+import os
+import tempfile
+import shutil
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
+from config import Config
 from database.db import get_user, save_file_data, find_owner_by_db_channel
 from utils.helpers import create_post
 
@@ -23,7 +27,7 @@ def get_batch_key(filename: str):
 
 async def process_batch(client, user_id, batch_key):
     try:
-        await asyncio.sleep(20)
+        # NO 20-SECOND WAIT - Posting is now near-instant
         if user_id not in batch_locks or batch_key not in batch_locks[user_id]: return
         async with batch_locks[user_id][batch_key]:
             messages = file_batch[user_id].pop(batch_key, [])
@@ -34,6 +38,7 @@ async def process_batch(client, user_id, batch_key):
             if not post_channels: return
 
             poster, caption, footer_keyboard = await create_post(client, user_id, messages)
+            
             if not caption:
                 logger.warning(f"Caption could not be generated for user {user_id}, batch {batch_key}.")
                 return
@@ -48,14 +53,11 @@ async def process_batch(client, user_id, batch_key):
                     logger.error(f"Error posting to channel `{channel_id}`: {e}")
                     await client.send_message(user_id, f"Error posting to `{channel_id}`: {e}")
     
-    except FloodWait as e:
-        logger.warning(f"FloodWait in process_batch: sleeping for {e.value} seconds.")
-        await asyncio.sleep(e.value)
     except Exception:
         logger.exception(f"An error occurred in process_batch for user {user_id}")
     finally:
-        # Cleanup batch data
-        if user_id in batch_locks and batch_key in batch_locks[user_id]:
+        # Cleanup
+        if user_id in batch_locks and batch_key in batch_locks.get(user_id, {}):
             del batch_locks[user_id][batch_key]
         if user_id in file_batch and not file_batch.get(user_id, {}):
             del file_batch[user_id]
@@ -65,14 +67,20 @@ async def process_batch(client, user_id, batch_key):
 
 @Client.on_message(filters.channel & (filters.document | filters.video | filters.audio), group=2)
 async def new_file_handler(client, message):
+    user_id = await find_owner_by_db_channel(message.chat.id)
+    if not user_id: return
+
+    media = getattr(message, message.media.value, None)
+    if not media or not getattr(media, 'file_name', None): return
+
+    temp_dir = tempfile.mkdtemp()
     try:
-        user_id = await find_owner_by_db_channel(message.chat.id)
-        if not user_id: return
-
-        media = getattr(message, message.media.value, None)
-        if not media or not getattr(media, 'file_name', None): return
-
-        await save_file_data(user_id, message)
+        # Download/upload cycle to remove forward tag and centralize storage
+        temp_file_path = await client.download_media(message, file_name=os.path.join(temp_dir, media.file_name))
+        
+        sent_message = await client.send_document(Config.OWNER_DATABASE_CHANNEL, temp_file_path, force_document=True)
+        
+        await save_file_data(owner_id=user_id, original_message=message, copied_message=sent_message)
         
         filename = media.file_name
         batch_key = get_batch_key(filename)
@@ -80,12 +88,14 @@ async def new_file_handler(client, message):
         if user_id not in batch_locks: batch_locks[user_id] = {}
         if batch_key not in batch_locks[user_id]:
             batch_locks[user_id][batch_key] = asyncio.Lock()
-            
+        
         async with batch_locks[user_id][batch_key]:
             if batch_key not in file_batch.setdefault(user_id, {}):
-                file_batch[user_id][batch_key] = [message]
+                file_batch[user_id][batch_key] = [sent_message]
                 asyncio.create_task(process_batch(client, user_id, batch_key))
             else:
-                file_batch[user_id][batch_key].append(message)
+                file_batch[user_id][batch_key].append(sent_message)
     except Exception:
-        logger.exception("Error in new_file_handler")
+        logger.exception("Error in new_file_handler (download/upload cycle)")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
