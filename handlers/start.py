@@ -5,13 +5,13 @@ from pyrogram.errors import UserNotParticipant, MessageNotModified
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import Config
 from database.db import add_user, get_file_by_unique_id, get_user, get_owner_db_channel
-from utils.helpers import get_main_menu
+from utils.helpers import get_main_menu, decode_link
 from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
 async def send_file(client, user_id, file_unique_id):
-    """Helper function to send the final file using its unique_id."""
+    """Helper function to send the final file."""
     try:
         file_data = await get_file_by_unique_id(file_unique_id)
         if not file_data:
@@ -20,13 +20,23 @@ async def send_file(client, user_id, file_unique_id):
         owner_db_id = await get_owner_db_channel()
         if not owner_db_id:
             logger.error("Owner DB Channel not set, cannot send file.")
-            return await client.send_message(user_id, "A configuration error occurred. Please contact the admin.")
+            return await client.send_message(user_id, "A configuration error occurred.")
+
+        # --- NEW: Create hyperlinked caption here ---
+        owner_settings = await get_user(file_data['owner_id'])
+        filename_url = owner_settings.get("filename_url")
+        file_name = file_data.get('file_name', 'N/A')
+        
+        if filename_url:
+            caption = f"✅ **Here is your file!**\n\n**[{file_name}]({filename_url})**"
+        else:
+            caption = f"✅ **Here is your file!**\n\n`{file_name}`"
 
         await client.copy_message(
             chat_id=user_id,
             from_chat_id=owner_db_id,
             message_id=file_data['file_id'],
-            caption=f"✅ **Here is your file!**\n\n`{file_data.get('file_name', 'N/A')}`"
+            caption=caption
         )
     except Exception:
         logger.exception("Error in send_file function")
@@ -61,20 +71,12 @@ async def start_command(client, message):
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Let's Go 🚀", callback_data=f"go_back_{user_id}")]]))
 
 async def handle_file_request(client, message, user_id, payload):
-    """Contains the logic for FSub check and showing the shortener link."""
     file_unique_id = payload.split("_", 1)[1]
-    
-    logger.info(f"[LINK_SEARCH] User {user_id} is searching for file_unique_id: {file_unique_id}")
-    
     file_data = await get_file_by_unique_id(file_unique_id)
-    if not file_data:
-        logger.warning(f"[LINK_SEARCH] File not found in DB for file_unique_id: {file_unique_id}")
-        return await message.reply_text("File not found or link has expired.")
-
+    if not file_data: return await message.reply_text("File not found or link has expired.")
     owner_id = file_data['owner_id']
     owner_settings = await get_user(owner_id)
     fsub_channel = owner_settings.get('fsub_channel')
-
     if fsub_channel:
         try:
             await client.get_chat_member(chat_id=fsub_channel, user_id=user_id)
@@ -86,11 +88,9 @@ async def handle_file_request(client, message, user_id, payload):
     
     final_delivery_link = f"https://t.me/{client.me.username}?start=finalget_{file_unique_id}"
     shortened_link = await get_shortlink(final_delivery_link, owner_id)
-    
     buttons = [[InlineKeyboardButton("➡️ Click Here to Get Your File ⬅️", url=shortened_link)]]
     if owner_settings.get("how_to_download_link"):
         buttons.append([InlineKeyboardButton("❓ How to Download", url=owner_settings["how_to_download_link"])])
-
     await message.reply_text(
         "**Your file is almost ready!**\n\n"
         "1. Click the button above to complete the task.\n"
@@ -100,10 +100,8 @@ async def handle_file_request(client, message, user_id, payload):
 
 @Client.on_callback_query(filters.regex(r"^retry_"))
 async def retry_handler(client, query):
-    user_id = query.from_user.id
-    payload = query.data.split("_", 1)[1]
     await query.message.delete()
-    await handle_file_request(client, query.message, user_id, payload)
+    await handle_file_request(client, query.message, query.from_user.id, query.data.split("_", 1)[1])
 
 @Client.on_callback_query(filters.regex(r"go_back_"))
 async def go_back_callback(client, query):
