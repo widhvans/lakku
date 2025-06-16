@@ -79,8 +79,11 @@ class Bot(Client):
                 message_to_process, user_id = await self.file_queue.get()
                 
                 if not self.owner_db_channel_id:
-                    logger.error(f"Owner DB not configured. Cannot process file '{message_to_process.document or message.video.file_name}'. Worker is sleeping.")
-                    await asyncio.sleep(30)
+                    # FIX: Use the correct variable name 'message_to_process'
+                    media = message_to_process.document or message_to_process.video or message_to_process.audio
+                    filename = getattr(media, 'file_name', 'Unknown Filename')
+                    logger.error(f"Owner DB not configured. Cannot process file '{filename}'. Worker is sleeping.")
+                    await asyncio.sleep(60)
                     # Put the item back in the queue to be retried later
                     await self.file_queue.put((message_to_process, user_id))
                     continue
@@ -116,10 +119,13 @@ class Bot(Client):
             async with self.batch_locks[user_id][batch_key]:
                 messages = self.file_batch[user_id].pop(batch_key, [])
                 if not messages: return
+                
                 user = await get_user(user_id)
                 if not user or not user.get('post_channels'): return
+
                 poster, caption, footer_keyboard = await create_post(self, user_id, messages)
                 if not caption: return
+
                 for channel_id in user.get('post_channels', []):
                     try:
                         if poster:
