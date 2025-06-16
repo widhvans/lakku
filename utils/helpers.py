@@ -9,14 +9,27 @@ from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
+# --- NEW LOCATION for get_batch_key ---
+def get_batch_key(filename: str):
+    """
+    This function creates a common name for related files to be batched together.
+    """
+    name = re.sub(r'\.\w+$', '', filename)
+    name = re.sub(r'[\._]', ' ', name)
+    delimiters = [
+        r'S\d{1,2}', r'Season\s?\d{1,2}', r'Part\s?\d{1,2}', r'E\d{1,3}', r'EP\d{1,3}',
+        r'\b(19|20)\d{2}\b', r'\b(4k|2160p|1080p|720p|480p)\b', r'\[.*?\]'
+    ]
+    match = re.search('|'.join(delimiters), name, re.I)
+    base_name = name[:match.start()].strip() if match else name.strip()
+    return re.sub(r'\s+', ' ', base_name).lower()
+
+
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
     if not user_settings: return InlineKeyboardMarkup([])
-
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
-    
-    # Final button layout: 1x1x2x2x2x2
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
@@ -37,12 +50,9 @@ async def get_main_menu(user_id):
             InlineKeyboardButton("❓ How to Download", callback_data="set_download")
         ]
     ]
-    
-    # Add admin-only buttons if the user is the bot owner
     if user_id == Config.ADMIN_ID:
-        # The "Set Owner DB" button is removed because the bot now does this automatically.
+        buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
-        
     return InlineKeyboardMarkup(buttons)
 
 def go_back_button(user_id):
@@ -59,35 +69,20 @@ async def get_file_raw_link(message):
     return f"https://t.me/c/{str(message.chat.id).replace('-100', '')}/{message.id}"
 
 def clean_filename(name: str):
-    """A very aggressive function to get the clean movie/show title and year."""
     if not name: return "Untitled", None
-    
-    # Remove promotional tags like [@channel]
     name = re.sub(r'\[@.*?\]', '', name)
-    # Remove file extension
     cleaned_name = re.sub(r'\.\w+$', '', name)
-    # Replace dots and underscores with spaces
     cleaned_name = re.sub(r'[\._]', ' ', cleaned_name)
-    
-    # Extract Year
     year_match = re.search(r'\b(19|20)\d{2}\b', cleaned_name)
     year = year_match.group(0) if year_match else None
-    
-    # Remove year and text in brackets for a cleaner title search
     if year: cleaned_name = cleaned_name.split(year)[0]
     cleaned_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', cleaned_name)
-    
-    # Remove all common media tags
-    tags_pattern = r'\b(1080p|720p|480p|2160p|4k|HD|FHD|UHD|BluRay|WEBRip|WEB-DL|HDRip|x264|x265|HEVC|AAC|Dual[ -]?Audio|Hindi|English|Esubs|S\d+E\d+|S\d+|Season\s?\d+|Part\s?\d+|E\d+|EP\d+)\b'
-    cleaned_name = re.sub(tags_pattern, '', cleaned_name, flags=re.I)
-    
-    # Final cleanup
+    tags_to_remove = ['1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL', 'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs', r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+']
+    for tag in tags_to_remove:
+        cleaned_name = re.sub(r'\b' + tag + r'\b', '', cleaned_name, flags=re.I)
     final_title = re.sub(r'\s+', ' ', cleaned_name).strip()
-    
-    # Fallback if cleaning removes everything
     if not final_title:
         final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
-
     return (f"{final_title} {year}".strip() if year else final_title), year
 
 def encode_link(text: str) -> str:
@@ -99,45 +94,29 @@ def decode_link(encoded_text: str) -> str:
     return base64.urlsafe_b64decode(encoded_text).decode()
 
 def natural_sort_key(s: str):
-    """Creates a key for natural sorting (e.g., Episode 10 after Episode 2)."""
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'([0-9]+)', s)]
 
 async def create_post(client, user_id, messages):
     user = await get_user(user_id)
     if not user: return None, None, None
-    
     bot_username = client.me.username
     title, year = clean_filename(getattr(messages[0], messages[0].media.value).file_name)
     caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
-    
     links = ""
-    # Use natural sorting for perfect episode/part ordering
     messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
-    
     for msg in messages:
         media = getattr(msg, msg.media.value)
-        
-        # Clean the filename for display
         link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
-        link_label = re.sub(r'[\._]', ' ', link_label)
-        link_label = re.sub(r'\s+', ' ', link_label).strip()
-        
+        link_label = re.sub(r'[\._]', ' ', link_label).strip()
         file_unique_id = media.file_unique_id
-        
-        # Use the permanent web link for resilience
         permanent_web_link = f"http://{Config.VPS_IP}:{Config.VPS_PORT}/get/{file_unique_id}"
-        
         links += f"📁 `{link_label}`\n\n[🔗 Click Here]({permanent_web_link})\n\n"
-        
     custom_caption = f"\n{user.get('custom_caption', '')}" if user.get('custom_caption') else ""
     final_caption = f"{caption_header}\n\n{links}{custom_caption}"
-    
     post_poster = await get_poster(title, year) if user.get('show_poster', True) else None
-    
     footer_buttons_data = user.get('footer_buttons', [])
     footer_keyboard = None
     if footer_buttons_data:
         buttons = [[InlineKeyboardButton(btn['name'], url=btn['url'])] for btn in footer_buttons_data]
         footer_keyboard = InlineKeyboardMarkup(buttons)
-        
     return post_poster, final_caption, footer_keyboard
