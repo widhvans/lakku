@@ -9,12 +9,14 @@ from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
-# (All functions before create_post are unchanged from the last final version)
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
     if not user_settings: return InlineKeyboardMarkup([])
+
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
+    
+    # Final button layout: 1x1x2x2x2x2
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
@@ -23,19 +25,24 @@ async def get_main_menu(user_id):
             InlineKeyboardButton("🔄 Backup Links", callback_data="backup_links")
         ],
         [
-            InlineKeyboardButton("🔗 Set Filename Link", callback_data="set_filename_link"),
+            InlineKeyboardButton("✍️ Manage Caption", callback_data="caption_menu"),
             InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer")
         ],
         [
             InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu"),
             InlineKeyboardButton("📂 My Files", callback_data="my_files_1")
         ],
-        [InlineKeyboardButton(fsub_text, callback_data="set_fsub")],
-        [InlineKeyboardButton("❓ How to Download", callback_data="set_download")]
+        [
+            InlineKeyboardButton(fsub_text, callback_data="set_fsub"),
+            InlineKeyboardButton("❓ How to Download", callback_data="set_download")
+        ]
     ]
+    
+    # Add admin-only buttons if the user is the bot owner
     if user_id == Config.ADMIN_ID:
-        buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
+        # The "Set Owner DB" button is removed because the bot now does this automatically.
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
+        
     return InlineKeyboardMarkup(buttons)
 
 def go_back_button(user_id):
@@ -52,20 +59,35 @@ async def get_file_raw_link(message):
     return f"https://t.me/c/{str(message.chat.id).replace('-100', '')}/{message.id}"
 
 def clean_filename(name: str):
+    """A very aggressive function to get the clean movie/show title and year."""
     if not name: return "Untitled", None
+    
+    # Remove promotional tags like [@channel]
     name = re.sub(r'\[@.*?\]', '', name)
+    # Remove file extension
     cleaned_name = re.sub(r'\.\w+$', '', name)
+    # Replace dots and underscores with spaces
     cleaned_name = re.sub(r'[\._]', ' ', cleaned_name)
+    
+    # Extract Year
     year_match = re.search(r'\b(19|20)\d{2}\b', cleaned_name)
     year = year_match.group(0) if year_match else None
+    
+    # Remove year and text in brackets for a cleaner title search
     if year: cleaned_name = cleaned_name.split(year)[0]
     cleaned_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', cleaned_name)
-    tags_to_remove = ['1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL', 'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs', r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+']
-    for tag in tags_to_remove:
-        cleaned_name = re.sub(r'\b' + tag + r'\b', '', cleaned_name, flags=re.I)
+    
+    # Remove all common media tags
+    tags_pattern = r'\b(1080p|720p|480p|2160p|4k|HD|FHD|UHD|BluRay|WEBRip|WEB-DL|HDRip|x264|x265|HEVC|AAC|Dual[ -]?Audio|Hindi|English|Esubs|S\d+E\d+|S\d+|Season\s?\d+|Part\s?\d+|E\d+|EP\d+)\b'
+    cleaned_name = re.sub(tags_pattern, '', cleaned_name, flags=re.I)
+    
+    # Final cleanup
     final_title = re.sub(r'\s+', ' ', cleaned_name).strip()
+    
+    # Fallback if cleaning removes everything
     if not final_title:
         final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
+
     return (f"{final_title} {year}".strip() if year else final_title), year
 
 def encode_link(text: str) -> str:
@@ -76,7 +98,8 @@ def decode_link(encoded_text: str) -> str:
     encoded_text += "=" * padding
     return base64.urlsafe_b64decode(encoded_text).decode()
 
-def natural_sort_key(s):
+def natural_sort_key(s: str):
+    """Creates a key for natural sorting (e.g., Episode 10 after Episode 2)."""
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'([0-9]+)', s)]
 
 async def create_post(client, user_id, messages):
@@ -88,23 +111,26 @@ async def create_post(client, user_id, messages):
     caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
     
     links = ""
+    # Use natural sorting for perfect episode/part ordering
     messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
     
     for msg in messages:
         media = getattr(msg, msg.media.value)
+        
+        # Clean the filename for display
         link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
-        link_label = re.sub(r'[\._]', ' ', link_label).strip()
+        link_label = re.sub(r'[\._]', ' ', link_label)
+        link_label = re.sub(r'\s+', ' ', link_label).strip()
         
         file_unique_id = media.file_unique_id
         
-        payload = f"get_{file_unique_id}"
-        bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
+        # Use the permanent web link for resilience
+        permanent_web_link = f"http://{Config.VPS_IP}:{Config.VPS_PORT}/get/{file_unique_id}"
         
-        # --- REVERTED: Filename is now just plain text ---
-        filename_part = f"📁 `{link_label}`"
-        links += f"{filename_part}\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
+        links += f"📁 `{link_label}`\n\n[🔗 Click Here]({permanent_web_link})\n\n"
         
-    final_caption = f"{caption_header}\n\n{links}"
+    custom_caption = f"\n{user.get('custom_caption', '')}" if user.get('custom_caption') else ""
+    final_caption = f"{caption_header}\n\n{links}{custom_caption}"
     
     post_poster = await get_poster(title, year) if user.get('show_poster', True) else None
     
