@@ -1,27 +1,24 @@
 import os
 
 class Config:
-    # Your API details from my.telegram.org
     API_ID = int(os.environ.get("API_ID", "10389378"))
     API_HASH = os.environ.get("API_HASH", "cdd5c820cb6abeecaef38e2bb8db4860")
-
-    # Your Bot Token
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "7513275210:AAGgRzfVk1_nEaekouSY1kWmp0eqD3pNw-I")  # 7320891454:AAHp3AAIZK2RKIkWyYIByB_fSEq9Xuk9-bk
-
-    # Your Admin User ID
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "7513275210:AAGgRzfVk1_nEaekouSY1kWmp0eqD3pNw-I")
     ADMIN_ID = int(os.environ.get("ADMIN_ID", "1938030055"))
 
-    # Your MongoDB Connection String
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://soniji:chaloji@cluster0.i5zy74f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
     DATABASE_NAME = os.environ.get("DATABASE_NAME", "telegram_bot")
     
-    # --- Your VPS IP Address and Port ---
-    # The domain where your bot is running. Use your VPS IP.
-    # DO NOT include http://
-    VPS_IP = os.environ.get("VPS_IP", "65.21.183.36")
+    # --- Your main, private database channel ID ---
+    # The bot MUST be an admin in this channel.
+    OWNER_DATABASE_CHANNEL = int(os.environ.get("OWNER_DATABASE_CHANNEL", -1002832802347))
     
-    # --- PORT CHANGED TO 4040 AS REQUESTED ---
-    VPS_PORT = int(os.environ.get("VPS_PORT", 7071))
-    
-    # The name of the file that stores your bot's username
+    # A default link for your shortener to use in the bot's PM.
+    SHORTENER_AD_LINK = os.environ.get("SHORTENER_AD_LINK", "https://google.com")
+
+    # The file that stores your bot's username for the web redirector
     BOT_USERNAME_FILE = "bot_username.txt"
+    
+    # Your VPS IP and Port for the web redirector
+    VPS_IP = os.environ.get("VPS_IP", "65.21.183.36")
+    VPS_PORT = int(os.environ.get("VPS_PORT", 7071))
