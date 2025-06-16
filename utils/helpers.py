@@ -9,6 +9,7 @@ from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
+# (All functions before create_post are unchanged from the last final version)
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
     if not user_settings: return InlineKeyboardMarkup([])
@@ -22,15 +23,14 @@ async def get_main_menu(user_id):
             InlineKeyboardButton("🔄 Backup Links", callback_data="backup_links")
         ],
         [
-            InlineKeyboardButton("🔗 Set Filename Link", callback_data="caption_menu")], # Changed from "Manage Caption"
-        [
-            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer"),
-            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu")
+            InlineKeyboardButton("🔗 Set Filename Link", callback_data="set_filename_link"),
+            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer")
         ],
         [
-            InlineKeyboardButton("📂 My Files", callback_data="my_files_1"),
-            InlineKeyboardButton(fsub_text, callback_data="set_fsub")
+            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu"),
+            InlineKeyboardButton("📂 My Files", callback_data="my_files_1")
         ],
+        [InlineKeyboardButton(fsub_text, callback_data="set_fsub")],
         [InlineKeyboardButton("❓ How to Download", callback_data="set_download")]
     ]
     if user_id == Config.ADMIN_ID:
@@ -90,11 +90,6 @@ async def create_post(client, user_id, messages):
     links = ""
     messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
     
-    # --- DEBUGGING AND FIX ---
-    # Get the user-set URL for the filename hyperlink
-    filename_url = user.get("filename_url")
-    logger.info(f"[POST_CREATE_DEBUG] For user {user_id}, found filename_url: {filename_url}")
-    
     for msg in messages:
         media = getattr(msg, msg.media.value)
         link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
@@ -105,12 +100,8 @@ async def create_post(client, user_id, messages):
         payload = f"get_{file_unique_id}"
         bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
         
-        # Create hyperlinked filename if URL is set
-        if filename_url:
-            filename_part = f"**[📁 `{link_label}`]({filename_url})**"
-        else:
-            filename_part = f"📁 `{link_label}`"
-
+        # --- REVERTED: Filename is now just plain text ---
+        filename_part = f"📁 `{link_label}`"
         links += f"{filename_part}\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
         
     final_caption = f"{caption_header}\n\n{links}"
