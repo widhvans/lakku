@@ -24,7 +24,7 @@ async def get_main_menu(user_id):
             InlineKeyboardButton("🔄 Backup Links", callback_data="backup_links")
         ],
         [
-            InlineKeyboardButton("✍️ Manage Caption", callback_data="caption_menu"),
+            InlineKeyboardButton("🔗 Set Filename Link", callback_data="set_filename_link"), # Changed from "Manage Caption"
             InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer")
         ],
         [
@@ -41,57 +41,19 @@ async def get_main_menu(user_id):
         
     return InlineKeyboardMarkup(buttons)
 
-def go_back_button(user_id):
-    return InlineKeyboardMarkup([[InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]])
-
-def format_bytes(size):
-    if not isinstance(size, (int, float)): return "N/A"
-    power = 1024; n = 0; power_labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
-    while size >= power and n < len(power_labels) - 1 :
-        size /= power; n += 1
-    return f"{size:.2f} {power_labels[n]}"
-
-async def get_file_raw_link(message):
-    return f"https://t.me/c/{str(message.chat.id).replace('-100', '')}/{message.id}"
-
-def clean_filename(name: str):
-    if not name: return "Untitled", None
-    name = re.sub(r'\[@.*?\]', '', name)
-    cleaned_name = re.sub(r'\.\w+$', '', name)
-    cleaned_name = re.sub(r'[\._]', ' ', cleaned_name)
-    year_match = re.search(r'\b(19|20)\d{2}\b', cleaned_name)
-    year = year_match.group(0) if year_match else None
-    if year: cleaned_name = cleaned_name.split(year)[0]
-    cleaned_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', cleaned_name)
-    tags_to_remove = [
-        '1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL',
-        'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs',
-        r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+'
-    ]
-    for tag in tags_to_remove:
-        cleaned_name = re.sub(r'\b' + tag + r'\b', '', cleaned_name, flags=re.I)
-    final_title = re.sub(r'\s+', ' ', cleaned_name).strip()
-    if not final_title:
-        final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
-    return (f"{final_title} {year}".strip() if year else final_title), year
-
-def encode_link(text: str) -> str:
-    return base64.urlsafe_b64encode(text.encode()).decode().strip("=")
-
-def decode_link(encoded_text: str) -> str:
-    padding = 4 - (len(encoded_text) % 4)
-    encoded_text += "=" * padding
-    return base64.urlsafe_b64decode(encoded_text).decode()
-
 async def create_post(client, user_id, messages):
     user = await get_user(user_id)
     if not user: return None, None, None
     
+    bot_username = client.me.username
     title, year = clean_filename(getattr(messages[0], messages[0].media.value).file_name)
     caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
     
     links = ""
     messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
+    
+    # Get the user-set URL for the filename hyperlink
+    filename_url = user.get("filename_url")
     
     for msg in messages:
         media = getattr(msg, msg.media.value)
@@ -100,13 +62,19 @@ async def create_post(client, user_id, messages):
         
         file_unique_id = media.file_unique_id
         
-        # --- Create permanent link using your VPS IP ---
-        permanent_web_link = f"http://{Config.VPS_IP}:{Config.VPS_PORT}/get/{file_unique_id}"
+        payload = f"get_{file_unique_id}"
+        bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
         
-        links += f"📁 `{link_label}`\n\n[🔗 Click Here]({permanent_web_link})\n\n"
+        # --- NEW: Create hyperlinked filename if URL is set ---
+        if filename_url:
+            filename_part = f"**[📁 `{link_label}`]({filename_url})**"
+        else:
+            filename_part = f"📁 `{link_label}`"
+
+        links += f"{filename_part}\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
         
-    custom_caption = f"\n{user.get('custom_caption', '')}" if user.get('custom_caption') else ""
-    final_caption = f"{caption_header}\n\n{links}{custom_caption}"
+    # The old custom_caption is now removed from here
+    final_caption = f"{caption_header}\n\n{links}"
     
     post_poster = await get_poster(title, year) if user.get('show_poster', True) else None
     
@@ -118,6 +86,38 @@ async def create_post(client, user_id, messages):
         
     return post_poster, final_caption, footer_keyboard
 
+# (The rest of the file is unchanged)
+def go_back_button(user_id):
+    return InlineKeyboardMarkup([[InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]])
+def format_bytes(size):
+    if not isinstance(size, (int, float)): return "N/A"
+    power = 1024; n = 0; power_labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
+    while size >= power and n < len(power_labels) - 1 :
+        size /= power; n += 1
+    return f"{size:.2f} {power_labels[n]}"
+async def get_file_raw_link(message):
+    return f"https://t.me/c/{str(message.chat.id).replace('-100', '')}/{message.id}"
+def clean_filename(name: str):
+    if not name: return "Untitled", None
+    name = re.sub(r'\[@.*?\]', '', name)
+    cleaned_name = re.sub(r'\.\w+$', '', name)
+    cleaned_name = re.sub(r'[\._]', ' ', cleaned_name)
+    year_match = re.search(r'\b(19|20)\d{2}\b', cleaned_name)
+    year = year_match.group(0) if year_match else None
+    if year: cleaned_name = cleaned_name.split(year)[0]
+    cleaned_name = re.sub(r'\[.*?\]|\(.*?\)|\{.*?\}', '', cleaned_name)
+    tags_to_remove = ['1080p', '720p', '480p', '2160p', '4k', 'HD', 'FHD', 'UHD', 'BluRay', 'WEBRip', 'WEB-DL', 'HDRip', 'x264', 'x265', 'HEVC', 'AAC', 'Dual Audio', 'Hindi', 'English', 'Esubs', r'S\d+E\d+', r'S\d+', r'Season\s?\d+', r'Part\s?\d+', r'E\d+', r'EP\d+']
+    for tag in tags_to_remove:
+        cleaned_name = re.sub(r'\b' + tag + r'\b', '', cleaned_name, flags=re.I)
+    final_title = re.sub(r'\s+', ' ', cleaned_name).strip()
+    if not final_title:
+        final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
+    return (f"{final_title} {year}".strip() if year else final_title), year
+def encode_link(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode()).decode().strip("=")
+def decode_link(encoded_text: str) -> str:
+    padding = 4 - (len(encoded_text) % 4)
+    encoded_text += "=" * padding
+    return base64.urlsafe_b64decode(encoded_text).decode()
 def natural_sort_key(s):
-    """Creates a key for natural sorting (e.g., Episode 10 after Episode 2)."""
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'([0-9]+)', s)]
