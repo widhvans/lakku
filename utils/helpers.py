@@ -12,10 +12,8 @@ logger = logging.getLogger(__name__)
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
     if not user_settings: return InlineKeyboardMarkup([])
-
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
-    
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
@@ -24,79 +22,35 @@ async def get_main_menu(user_id):
             InlineKeyboardButton("🔄 Backup Links", callback_data="backup_links")
         ],
         [
-            InlineKeyboardButton("🔗 Set Filename Link", callback_data="set_filename_link"), # Changed from "Manage Caption"
-            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer")
+            InlineKeyboardButton("🔗 Set Filename Link", callback_data="caption_menu")], # Changed from "Manage Caption"
+        [
+            InlineKeyboardButton("👣 Footer Buttons", callback_data="manage_footer"),
+            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu")
         ],
         [
-            InlineKeyboardButton("🖼️ IMDb Poster", callback_data="poster_menu"),
-            InlineKeyboardButton("📂 My Files", callback_data="my_files_1")
+            InlineKeyboardButton("📂 My Files", callback_data="my_files_1"),
+            InlineKeyboardButton(fsub_text, callback_data="set_fsub")
         ],
-        [InlineKeyboardButton(fsub_text, callback_data="set_fsub")],
         [InlineKeyboardButton("❓ How to Download", callback_data="set_download")]
     ]
-    
     if user_id == Config.ADMIN_ID:
         buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
-        
     return InlineKeyboardMarkup(buttons)
 
-async def create_post(client, user_id, messages):
-    user = await get_user(user_id)
-    if not user: return None, None, None
-    
-    bot_username = client.me.username
-    title, year = clean_filename(getattr(messages[0], messages[0].media.value).file_name)
-    caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
-    
-    links = ""
-    messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
-    
-    # Get the user-set URL for the filename hyperlink
-    filename_url = user.get("filename_url")
-    
-    for msg in messages:
-        media = getattr(msg, msg.media.value)
-        link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
-        link_label = re.sub(r'[\._]', ' ', link_label).strip()
-        
-        file_unique_id = media.file_unique_id
-        
-        payload = f"get_{file_unique_id}"
-        bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
-        
-        # --- NEW: Create hyperlinked filename if URL is set ---
-        if filename_url:
-            filename_part = f"**[📁 `{link_label}`]({filename_url})**"
-        else:
-            filename_part = f"📁 `{link_label}`"
-
-        links += f"{filename_part}\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
-        
-    # The old custom_caption is now removed from here
-    final_caption = f"{caption_header}\n\n{links}"
-    
-    post_poster = await get_poster(title, year) if user.get('show_poster', True) else None
-    
-    footer_buttons_data = user.get('footer_buttons', [])
-    footer_keyboard = None
-    if footer_buttons_data:
-        buttons = [[InlineKeyboardButton(btn['name'], url=btn['url'])] for btn in footer_buttons_data]
-        footer_keyboard = InlineKeyboardMarkup(buttons)
-        
-    return post_poster, final_caption, footer_keyboard
-
-# (The rest of the file is unchanged)
 def go_back_button(user_id):
     return InlineKeyboardMarkup([[InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]])
+
 def format_bytes(size):
     if not isinstance(size, (int, float)): return "N/A"
     power = 1024; n = 0; power_labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
     while size >= power and n < len(power_labels) - 1 :
         size /= power; n += 1
     return f"{size:.2f} {power_labels[n]}"
+
 async def get_file_raw_link(message):
     return f"https://t.me/c/{str(message.chat.id).replace('-100', '')}/{message.id}"
+
 def clean_filename(name: str):
     if not name: return "Untitled", None
     name = re.sub(r'\[@.*?\]', '', name)
@@ -113,11 +67,60 @@ def clean_filename(name: str):
     if not final_title:
         final_title = re.sub(r'\.\w+$', '', name).replace(".", " ")
     return (f"{final_title} {year}".strip() if year else final_title), year
+
 def encode_link(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode()).decode().strip("=")
+
 def decode_link(encoded_text: str) -> str:
     padding = 4 - (len(encoded_text) % 4)
     encoded_text += "=" * padding
     return base64.urlsafe_b64decode(encoded_text).decode()
+
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'([0-9]+)', s)]
+
+async def create_post(client, user_id, messages):
+    user = await get_user(user_id)
+    if not user: return None, None, None
+    
+    bot_username = client.me.username
+    title, year = clean_filename(getattr(messages[0], messages[0].media.value).file_name)
+    caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
+    
+    links = ""
+    messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
+    
+    # --- DEBUGGING AND FIX ---
+    # Get the user-set URL for the filename hyperlink
+    filename_url = user.get("filename_url")
+    logger.info(f"[POST_CREATE_DEBUG] For user {user_id}, found filename_url: {filename_url}")
+    
+    for msg in messages:
+        media = getattr(msg, msg.media.value)
+        link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
+        link_label = re.sub(r'[\._]', ' ', link_label).strip()
+        
+        file_unique_id = media.file_unique_id
+        
+        payload = f"get_{file_unique_id}"
+        bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
+        
+        # Create hyperlinked filename if URL is set
+        if filename_url:
+            filename_part = f"**[📁 `{link_label}`]({filename_url})**"
+        else:
+            filename_part = f"📁 `{link_label}`"
+
+        links += f"{filename_part}\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
+        
+    final_caption = f"{caption_header}\n\n{links}"
+    
+    post_poster = await get_poster(title, year) if user.get('show_poster', True) else None
+    
+    footer_buttons_data = user.get('footer_buttons', [])
+    footer_keyboard = None
+    if footer_buttons_data:
+        buttons = [[InlineKeyboardButton(btn['name'], url=btn['url'])] for btn in footer_buttons_data]
+        footer_keyboard = InlineKeyboardMarkup(buttons)
+        
+    return post_poster, final_caption, footer_keyboard
