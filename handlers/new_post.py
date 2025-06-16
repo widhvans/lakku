@@ -1,24 +1,18 @@
 import asyncio
 import re
 import logging
-import os
-import tempfile
-import shutil
 from pyrogram import Client, filters
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, ChatAdminRequired, UserNotParticipant
 from config import Config
-from database.db import get_user, save_file_data, find_owner_by_db_channel, get_owner_db_channel
+from database.db import get_user, save_file_data, find_owner_by_db_channel
 from utils.helpers import create_post
 
 logger = logging.getLogger(__name__)
 file_batch = {}
 batch_locks = {}
 
+# (The get_batch_key function is unchanged)
 def get_batch_key(filename: str):
-    """
-    This function creates a common name for related files to be batched together.
-    It is now called by the worker in bot.py.
-    """
     name = re.sub(r'\.\w+$', '', filename)
     name = re.sub(r'[\._]', ' ', name)
     delimiters = [
@@ -30,11 +24,8 @@ def get_batch_key(filename: str):
     return re.sub(r'\s+', ' ', base_name).lower()
 
 async def process_batch(client, user_id, batch_key):
-    """The task that waits a few seconds and posts a batch of files."""
     try:
-        # Near-instant posting with a very small buffer to catch simultaneous files
         await asyncio.sleep(2)
-        
         if user_id not in batch_locks or batch_key not in batch_locks.get(user_id, {}): return
         async with batch_locks[user_id][batch_key]:
             messages = file_batch[user_id].pop(batch_key, [])
@@ -53,6 +44,13 @@ async def process_batch(client, user_id, batch_key):
                             await client.send_photo(channel_id, photo=poster, caption=caption, reply_markup=footer_keyboard)
                         else:
                             await client.send_message(channel_id, caption, reply_markup=footer_keyboard, disable_web_page_preview=True)
+                    # --- NEW: Smart Notification for Users ---
+                    except (ChatAdminRequired, UserNotParticipant) as e:
+                        logger.error(f"Permission error in channel {channel_id} for user {user_id}. Error: {e}")
+                        await client.send_message(
+                            chat_id=user_id,
+                            text=f"⚠️ **Action Required!**\n\nI could not post to your channel with ID `{channel_id}`. It seems I am no longer an admin there.\n\nPlease make me an admin in that channel again to resume auto-posting."
+                        )
                     except Exception as e:
                         logger.error(f"Error posting to channel `{channel_id}`: {e}")
                         await client.send_message(user_id, f"Error posting to `{channel_id}`: {e}")
@@ -60,77 +58,29 @@ async def process_batch(client, user_id, batch_key):
     except Exception:
         logger.exception(f"An error occurred in process_batch for user {user_id}")
     finally:
-        # Cleanup batch data
-        if user_id in batch_locks and batch_key in batch_locks.get(user_id, {}):
-            del batch_locks[user_id][batch_key]
-        if user_id in file_batch and not file_batch.get(user_id, {}):
-            del file_batch[user_id]
-        if user_id in batch_locks and not batch_locks.get(user_id, {}):
-            del batch_locks[user_id]
-
+        # Cleanup
+        if user_id in batch_locks and batch_key in batch_locks.get(user_id, {}): del batch_locks[user_id][batch_key]
+        if user_id in file_batch and not file_batch.get(user_id, {}): del file_batch[user_id]
+        if user_id in batch_locks and not batch_locks.get(user_id, {}): del batch_locks[user_id]
 
 @Client.on_message(filters.channel & (filters.document | filters.video | filters.audio), group=2)
 async def new_file_handler(client, message):
+    # This handler now uses the globally available client.owner_db_channel_id
+    # set by the bot at startup. The logic is self-contained in the worker.
     try:
         user_id = await find_owner_by_db_channel(message.chat.id)
-        if not user_id: 
-            logger.warning(f"Received a file in an unregistered DB Channel: {message.chat.id}. Ignoring.")
-            return
+        if not user_id: return
 
         media = getattr(message, message.media.value, None)
         if not media or not getattr(media, 'file_name', None): return
         
-        owner_db_channel_id = await get_owner_db_channel()
-        if not owner_db_channel_id:
-            logger.warning(f"Owner Database Channel is not set. Cannot process file from user {user_id}.")
-            if user_id == Config.ADMIN_ID:
-                 await client.send_message(Config.ADMIN_ID, "⚠️ **Setup Incomplete:** You have not set your Owner Database Channel yet. Please go to settings and set it up to save files.")
-            return
+        if not client.owner_db_channel_id:
+             logger.warning("Owner Database Channel not yet set up by admin. Ignoring file.")
+             return
+        
+        # Add the message to the queue for the worker in bot.py to process
+        await client.file_queue.put((message, user_id))
+        logger.info(f"Added file '{media.file_name}' to the processing queue for user {user_id}.")
 
-        copied_message = None
-        try:
-            # Try the fast copy method first
-            copied_message = await message.copy(chat_id=owner_db_channel_id)
-        except Exception as e:
-            logger.warning(f"Fast copy failed: {e}. Falling back to download/upload method.")
-            # If fast copy fails, use the reliable download/upload method
-            temp_dir = tempfile.mkdtemp()
-            try:
-                temp_file_path = await client.download_media(message, file_name=os.path.join(temp_dir, media.file_name))
-                sent_message = await client.send_document(owner_db_channel_id, temp_file_path, force_document=True)
-                copied_message = sent_message
-            except Exception as e2:
-                logger.exception(f"Both copy and download/upload methods failed! Error: {e2}")
-                await client.send_message(Config.ADMIN_ID, f"⚠️ **CRITICAL ERROR:** Failed to save a file to the Owner Database. Please check my logs for details.\n\n`{e2}`")
-                return
-            finally:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                
-        if copied_message:
-            await save_file_data(
-                owner_id=user_id,
-                original_message=message,
-                copied_message=copied_message
-            )
-            
-            # --- NEW: Send confirmation to the user ---
-            await client.send_message(user_id, f"✅ Successfully indexed: `{media.file_name}`")
-            
-            filename = media.file_name
-            batch_key = get_batch_key(filename)
-
-            if user_id not in batch_locks: batch_locks[user_id] = {}
-            if batch_key not in batch_locks[user_id]:
-                batch_locks[user_id][batch_key] = asyncio.Lock()
-                
-            async with batch_locks[user_id][batch_key]:
-                if batch_key not in file_batch.setdefault(user_id, {}):
-                    file_batch[user_id][batch_key] = [copied_message]
-                    asyncio.create_task(process_batch(client, user_id, batch_key))
-                else:
-                    file_batch[user_id][batch_key].append(copied_message)
-
-    except Exception as e:
-        logger.exception("Error in new_file_handler")
-        if "USER_IS_BLOCKED" in str(e).upper() or "PEER_ID_INVALID" in str(e).upper():
-             await client.send_message(Config.ADMIN_ID, "⚠️ **CRITICAL ERROR:** I could not access the Owner Database Channel. Please make sure I am still an admin there and use the 'Set Owner DB' button again.")
+    except Exception:
+        logger.exception("Error in new_file_handler while adding to queue")
