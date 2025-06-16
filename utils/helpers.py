@@ -9,19 +9,13 @@ from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
-# --- NEW: Natural Sort Key Function ---
-def natural_sort_key(s):
-    """
-    Create a key for natural sorting.
-    Example: "file10.txt" comes after "file2.txt".
-    """
-    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'([0-9]+)', s)]
-
 async def get_main_menu(user_id):
     user_settings = await get_user(user_id)
     if not user_settings: return InlineKeyboardMarkup([])
+
     shortener_text = "⚙️ Shortener Settings" if user_settings.get('shortener_url') else "🔗 Set Shortener"
     fsub_text = "⚙️ Manage FSub" if user_settings.get('fsub_channel') else "📢 Set FSub"
+    
     buttons = [
         [InlineKeyboardButton("➕ Manage Auto Post", callback_data="manage_post_ch")],
         [InlineKeyboardButton("🗃️ Manage Index DB", callback_data="manage_db_ch")],
@@ -40,9 +34,11 @@ async def get_main_menu(user_id):
         [InlineKeyboardButton(fsub_text, callback_data="set_fsub")],
         [InlineKeyboardButton("❓ How to Download", callback_data="set_download")]
     ]
+    
     if user_id == Config.ADMIN_ID:
         buttons.append([InlineKeyboardButton("🔑 Set Owner DB", callback_data="set_owner_db")])
         buttons.append([InlineKeyboardButton("⚠️ Reset Files DB", callback_data="reset_db_prompt")])
+        
     return InlineKeyboardMarkup(buttons)
 
 def go_back_button(user_id):
@@ -91,28 +87,23 @@ async def create_post(client, user_id, messages):
     user = await get_user(user_id)
     if not user: return None, None, None
     
-    bot_username = client.me.username
     title, year = clean_filename(getattr(messages[0], messages[0].media.value).file_name)
     caption_header = f"🎬 **{title} {f'({year})' if year else ''}**"
     
     links = ""
-    
-    # --- NEW: Use natural sorting for perfect episode/part ordering ---
     messages.sort(key=lambda m: natural_sort_key(getattr(m, m.media.value).file_name))
     
     for msg in messages:
         media = getattr(msg, msg.media.value)
-        
         link_label = re.sub(r'\[@.*?\]', '', media.file_name).strip()
-        link_label = re.sub(r'[\._]', ' ', link_label)
-        link_label = re.sub(r'\s+', ' ', link_label).strip()
+        link_label = re.sub(r'[\._]', ' ', link_label).strip()
         
         file_unique_id = media.file_unique_id
         
-        payload = f"get_{file_unique_id}"
-        bot_redirect_link = f"https://t.me/{bot_username}?start={payload}"
+        # --- Create permanent link using your VPS IP ---
+        permanent_web_link = f"http://{Config.VPS_IP}:{Config.VPS_PORT}/get/{file_unique_id}"
         
-        links += f"📁 `{link_label}`\n\n[🔗 Click Here]({bot_redirect_link})\n\n"
+        links += f"📁 `{link_label}`\n\n[🔗 Click Here]({permanent_web_link})\n\n"
         
     custom_caption = f"\n{user.get('custom_caption', '')}" if user.get('custom_caption') else ""
     final_caption = f"{caption_header}\n\n{links}{custom_caption}"
@@ -126,3 +117,7 @@ async def create_post(client, user_id, messages):
         footer_keyboard = InlineKeyboardMarkup(buttons)
         
     return post_poster, final_caption, footer_keyboard
+
+def natural_sort_key(s):
+    """Creates a key for natural sorting (e.g., Episode 10 after Episode 2)."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'([0-9]+)', s)]
