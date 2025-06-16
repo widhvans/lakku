@@ -47,24 +47,30 @@ class Bot(Client):
             plugins=dict(root="handlers")
         )
         self.me = None
+        self.owner_db_channel_id = None
+        self.web_app = None
+        self.web_runner = None
         self.file_queue = asyncio.Queue()
         self.file_batch = {}
         self.batch_locks = {}
-        self.web_app = None
-        self.web_runner = None
 
     async def file_processor_worker(self):
+        """The single worker that processes files from the queue one by one."""
         logger.info("File processor worker started.")
         while True:
             try:
                 message_to_process, user_id = await self.file_queue.get()
-                owner_db_id = await get_owner_db_channel()
-                if not owner_db_id:
+                
+                # Check for the ID on each run, in case it was just set
+                if not self.owner_db_channel_id:
+                    self.owner_db_channel_id = await get_owner_db_channel()
+
+                if not self.owner_db_channel_id:
                     logger.error("Owner DB not set. Worker is sleeping for 60s.")
                     await asyncio.sleep(60)
                     continue
 
-                copied_message = await message_to_process.copy(chat_id=owner_db_id)
+                copied_message = await message_to_process.copy(chat_id=self.owner_db_channel_id)
                 await save_file_data(owner_id=user_id, original_message=message_to_process, copied_message=copied_message)
                 
                 filename = getattr(copied_message, copied_message.media.value).file_name
@@ -80,6 +86,7 @@ class Bot(Client):
                         asyncio.create_task(self.process_batch_task(user_id, batch_key))
                     else:
                         self.file_batch[user_id][batch_key].append(copied_message)
+                
                 await asyncio.sleep(2)
             except Exception:
                 logger.exception("Error in file processor worker")
@@ -87,16 +94,20 @@ class Bot(Client):
                 self.file_queue.task_done()
 
     async def process_batch_task(self, user_id, batch_key):
+        """The task that waits and posts a batch of files."""
         try:
             await asyncio.sleep(10)
             if user_id not in self.batch_locks or batch_key not in self.batch_locks.get(user_id, {}): return
             async with self.batch_locks[user_id][batch_key]:
                 messages = self.file_batch[user_id].pop(batch_key, [])
                 if not messages: return
+                
                 user = await get_user(user_id)
                 if not user or not user.get('post_channels'): return
+
                 poster, caption, footer_keyboard = await create_post(self, user_id, messages)
                 if not caption: return
+
                 for channel_id in user.get('post_channels', []):
                     try:
                         if poster:
@@ -125,18 +136,24 @@ class Bot(Client):
         await super().start()
         self.me = await self.get_me()
         
-        # Automatically update the username file
+        # Load the Owner DB Channel ID from the database into the bot's memory
+        self.owner_db_channel_id = await get_owner_db_channel()
+        if self.owner_db_channel_id:
+            logger.info(f"Successfully loaded Owner Database ID [{self.owner_db_channel_id}] from database.")
+        else:
+            logger.warning("Owner Database ID is not yet set. Please use the 'Set Owner DB' button as admin.")
+
         try:
             with open(Config.BOT_USERNAME_FILE, 'w') as f:
                 f.write(f"@{self.me.username}")
             logger.info(f"Successfully updated bot username to @{self.me.username} in {Config.BOT_USERNAME_FILE}")
         except Exception as e:
-            logger.error(f"Could not write to {Config.BOT_USERNAME_FILE}. Please check file permissions. Error: {e}")
+            logger.error(f"Could not write to {Config.BOT_USERNAME_FILE}. Error: {e}")
         
         # Start the worker and web server
         asyncio.create_task(self.file_processor_worker())
         await self.start_web_server()
-        logger.info(f"Bot @{self.me.username} and services started successfully.")
+        logger.info(f"Bot @{self.me.username} and all services started successfully.")
 
     async def stop(self, *args):
         logger.info("Stopping bot and web server...")
