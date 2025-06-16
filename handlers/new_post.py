@@ -15,6 +15,10 @@ file_batch = {}
 batch_locks = {}
 
 def get_batch_key(filename: str):
+    """
+    This function creates a common name for related files to be batched together.
+    It is now called by the worker in bot.py.
+    """
     name = re.sub(r'\.\w+$', '', filename)
     name = re.sub(r'[\._]', ' ', name)
     delimiters = [
@@ -26,8 +30,11 @@ def get_batch_key(filename: str):
     return re.sub(r'\s+', ' ', base_name).lower()
 
 async def process_batch(client, user_id, batch_key):
+    """The task that waits a few seconds and posts a batch of files."""
     try:
+        # Near-instant posting with a very small buffer to catch simultaneous files
         await asyncio.sleep(2)
+        
         if user_id not in batch_locks or batch_key not in batch_locks.get(user_id, {}): return
         async with batch_locks[user_id][batch_key]:
             messages = file_batch[user_id].pop(batch_key, [])
@@ -53,12 +60,14 @@ async def process_batch(client, user_id, batch_key):
     except Exception:
         logger.exception(f"An error occurred in process_batch for user {user_id}")
     finally:
+        # Cleanup batch data
         if user_id in batch_locks and batch_key in batch_locks.get(user_id, {}):
             del batch_locks[user_id][batch_key]
         if user_id in file_batch and not file_batch.get(user_id, {}):
             del file_batch[user_id]
         if user_id in batch_locks and not batch_locks.get(user_id, {}):
             del batch_locks[user_id]
+
 
 @Client.on_message(filters.channel & (filters.document | filters.video | filters.audio), group=2)
 async def new_file_handler(client, message):
@@ -80,9 +89,11 @@ async def new_file_handler(client, message):
 
         copied_message = None
         try:
+            # Try the fast copy method first
             copied_message = await message.copy(chat_id=owner_db_channel_id)
         except Exception as e:
             logger.warning(f"Fast copy failed: {e}. Falling back to download/upload method.")
+            # If fast copy fails, use the reliable download/upload method
             temp_dir = tempfile.mkdtemp()
             try:
                 temp_file_path = await client.download_media(message, file_name=os.path.join(temp_dir, media.file_name))
