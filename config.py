@@ -15,12 +15,13 @@ class Config:
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://soniji:chaloji@cluster0.i5zy74f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
     DATABASE_NAME = os.environ.get("DATABASE_NAME", "telegram_bot")
     
-    # --- NEW: Your VPS IP Address and Port ---
+    # --- Your VPS IP Address and Port ---
     # The domain where your bot is running. Use your VPS IP.
     # DO NOT include http://
     VPS_IP = os.environ.get("VPS_IP", "65.21.183.36")
-    # The port your web server will run on.
-    VPS_PORT = int(os.environ.get("VPS_PORT", 5050))
+    
+    # --- PORT CHANGED TO 4040 AS REQUESTED ---
+    VPS_PORT = int(os.environ.get("VPS_PORT", 4040))
     
     # The name of the file that stores your bot's username
     BOT_USERNAME_FILE = "bot_username.txt"
