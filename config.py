@@ -9,7 +9,7 @@ class Config:
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "7513275210:AAGgRzfVk1_nEaekouSY1kWmp0eqD3pNw-I")
 
     # Your Admin User ID
-    ADMIN_ID = int(os.environ.get("ADMIN_ID", "7944526906"))
+    ADMIN_ID = int(os.environ.get("ADMIN_ID", "1938030055"))
 
     # Your MongoDB Connection String
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://soniji:chaloji@cluster0.i5zy74f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
