@@ -1,42 +1,39 @@
 import logging
-import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 from database.db import (
-    total_users_count, get_all_user_ids, get_storage_owners_count, 
-    get_storage_owner_ids, get_normal_user_ids, delete_all_files, set_owner_db_channel
+    total_users_count, 
+    get_all_user_ids, 
+    get_storage_owners_count, 
+    get_storage_owner_ids, 
+    get_normal_user_ids, 
+    delete_all_files
 )
 from features.broadcaster import broadcast_message
 from utils.helpers import go_back_button
 
 logger = logging.getLogger(__name__)
 
-@Client.on_callback_query(filters.regex("set_owner_db") & filters.user(Config.ADMIN_ID))
-async def set_owner_db_handler(client, query):
+@Client.on_message(filters.command("connect_db") & filters.user(Config.ADMIN_ID))
+async def connect_db_handler(client, message):
+    """
+    This command forces the bot to resolve and cache the Owner DB Channel.
+    It should be run once after a new bot/session starts.
+    """
     try:
-        prompt = await query.message.edit_text(
-            "🔑 **Set Owner Database Channel**\n\n"
-            "Please forward any message from your main private channel where all files will be stored. "
-            "I must be an administrator in that channel.",
-            reply_markup=go_back_button(query.from_user.id)
+        await message.reply_text("⚙️ Attempting to connect to Owner Database Channel...")
+        chat = await client.get_chat(Config.OWNER_DATABASE_CHANNEL)
+        await message.reply_text(
+            f"✅ **Success!**\n\nConnection to `{chat.title}` is established and cached.\nThe bot is now fully operational."
         )
-        response = await client.listen(chat_id=query.from_user.id, filters=filters.forwarded, timeout=300)
-
-        if response.forward_from_chat:
-            channel_id = response.forward_from_chat.id
-            await set_owner_db_channel(channel_id)
-            await response.reply_text(f"✅ **Owner Database Set!**\n\nChannel: **{response.forward_from_chat.title}**\nID: `{channel_id}`\n\nAll files will now be copied here.", reply_markup=go_back_button(query.from_user.id))
-        else:
-            await response.reply_text("This is not a valid forwarded message from a channel.", reply_markup=go_back_button(query.from_user.id))
-        
-        await prompt.delete()
-
-    except asyncio.TimeoutError:
-        await query.message.edit_text("❗️ **Timeout:** Command cancelled.", reply_markup=go_back_button(query.from_user.id))
     except Exception as e:
-        logger.exception("Error in set_owner_db_handler")
-        await query.message.edit_text(f"An error occurred: {e}", reply_markup=go_back_button(query.from_user.id))
+        logger.exception("Error in /connect_db handler")
+        await message.reply_text(
+            f"❌ **Failed to access Owner Database Channel.**\n\n"
+            f"**Error:** `{e}`\n\n"
+            "Please make sure the `OWNER_DATABASE_CHANNEL` ID in your `config.py` is correct and that I am an admin in that channel."
+        )
 
 @Client.on_message(filters.command("stats") & filters.user(Config.ADMIN_ID))
 async def stats_handler(_, message):
@@ -58,7 +55,9 @@ async def stats_handler(_, message):
 async def broadcast_prompt_handler(client, message):
     if not message.reply_to_message:
         return await message.reply_text("Please reply to a message to start a broadcast.")
+    
     message_to_broadcast_id = message.reply_to_message.id
+    
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("To All Users 📣", callback_data=f"bcast_all_{message_to_broadcast_id}")],
         [InlineKeyboardButton("To Storage Owners Only 🗃️", callback_data=f"bcast_storage_{message_to_broadcast_id}")],
@@ -71,11 +70,13 @@ async def broadcast_callback_handler(client, query):
     try:
         broadcast_type, message_id_str = query.data.split("_")[1:]
         message_id = int(message_id_str)
+
         await query.message.edit_text("Fetching user list... Please wait.")
+        
         message_to_broadcast = await client.get_messages(chat_id=query.message.chat.id, message_ids=message_id)
         if not message_to_broadcast:
-            return await query.message.edit_text("Error: Could not find the original message.")
-        
+            return await query.message.edit_text("Error: Could not find the original message to broadcast.")
+
         if broadcast_type == "all":
             user_ids = await get_all_user_ids()
         elif broadcast_type == "storage":
