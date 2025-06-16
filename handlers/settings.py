@@ -7,14 +7,16 @@ from pyrogram.errors import MessageNotModified
 from database.db import (
     get_user, update_user, add_to_list, remove_from_list, 
     get_user_file_count, add_footer_button, remove_footer_button, 
-    get_all_user_files, get_paginated_files, search_user_files
+    get_all_user_files
 )
-from utils.helpers import go_back_button, get_main_menu, create_post, encode_link
-from handlers.new_post import get_batch_key
+# --- FIX: Import from the correct utility file ---
+from utils.helpers import go_back_button, get_main_menu, create_post, get_batch_key
 
 logger = logging.getLogger(__name__)
 ACTIVE_BACKUP_TASKS = set()
 
+# (The rest of the file is unchanged. For completeness, it's included below)
+# ...
 async def safe_edit_message(query, *args, **kwargs):
     """A helper function to safely edit messages and handle common errors."""
     try:
