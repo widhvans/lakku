@@ -20,10 +20,16 @@ async def safe_edit_message(query, *args, **kwargs):
     try:
         await query.message.edit_text(*args, **kwargs)
     except MessageNotModified:
-        await query.answer()
+        try:
+            await query.answer()
+        except:
+            pass
     except Exception as e:
         logger.exception("Error while editing message")
-        await query.answer("An error occurred. Please try again.", show_alert=True)
+        try:
+            await query.answer("An error occurred. Please try again.", show_alert=True)
+        except:
+            pass
 
 # --- SUB-MENU NAVIGATION AND LOGIC ---
 
@@ -39,15 +45,6 @@ async def get_shortener_menu_parts(user_id):
     buttons = [
         [InlineKeyboardButton("✍️ Change/Set Shortener", callback_data="set_shortener")],
         [InlineKeyboardButton(f"Toggle Shortener: {status}", callback_data="toggle_shortener")],
-        [InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]
-    ]
-    return text, InlineKeyboardMarkup(buttons)
-
-async def get_caption_menu_parts(user_id):
-    text = "**✍️ Manage Caption**"
-    buttons = [
-        [InlineKeyboardButton("👁️ Show Current Caption", callback_data="show_caption")],
-        [InlineKeyboardButton("⚙️ Change/Set Caption", callback_data="set_caption")],
         [InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")]
     ]
     return text, InlineKeyboardMarkup(buttons)
@@ -80,15 +77,13 @@ async def get_fsub_menu_parts(client, user_id):
     ]
     return text, InlineKeyboardMarkup(buttons)
 
-@Client.on_callback_query(filters.regex(r"^(shortener|caption|poster|fsub)_menu$"))
+@Client.on_callback_query(filters.regex(r"^(shortener|poster|fsub)_menu$"))
 async def settings_submenu_handler(client, query):
     user_id = query.from_user.id
     menu_type = query.data.split("_")[0]
     
     if menu_type == "shortener":
         text, markup = await get_shortener_menu_parts(user_id)
-    elif menu_type == "caption":
-        text, markup = await get_caption_menu_parts(user_id)
     elif menu_type == "poster":
         text, markup = await get_poster_menu_parts(user_id)
     elif menu_type == "fsub":
@@ -111,7 +106,7 @@ async def toggle_handler(client, query):
     
     if feature == "shortener":
         text, markup = await get_shortener_menu_parts(user_id)
-    else: # poster
+    else:
         text, markup = await get_poster_menu_parts(user_id)
     await safe_edit_message(query, text=text, reply_markup=markup)
 
@@ -123,11 +118,10 @@ async def my_files_handler(client, query):
     try:
         user_id = query.from_user.id
         page = int(query.data.split("_")[-1])
-        
         total_files = await get_user_file_count(user_id)
         files_per_page = 5
-        
         bot_username = client.me.username
+        
         text = f"**📂 Your Saved Files ({total_files} Total)**\n\n"
         
         if total_files == 0:
@@ -138,7 +132,8 @@ async def my_files_handler(client, query):
                 text += "No more files found on this page."
             else:
                 for file in files_on_page:
-                    payload = f"get_{encode_link(file['raw_link'])}"
+                    # FIX: Use file_unique_id for the payload
+                    payload = f"get_{file['file_unique_id']}"
                     deep_link = f"https://t.me/{bot_username}?start={payload}"
                     text += f"**File:** `{file['file_name']}`\n**Link:** [Click Here to Get File]({deep_link})\n\n"
                 
@@ -154,26 +149,23 @@ async def my_files_handler(client, query):
         await safe_edit_message(query, text=text, reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
     except Exception:
         logger.exception("Error in my_files_handler")
-        await query.answer("Something went wrong while fetching your files.", show_alert=True)
+        await query.answer("Something went wrong.", show_alert=True)
 
 async def _format_and_send_search_results(client, query, user_id, search_query, page):
     files_per_page = 5
     files_list, total_files = await search_user_files(user_id, search_query, page, files_per_page)
     bot_username = client.me.username
     text = f"**🔎 Search Results for `{search_query}` ({total_files} Found)**\n\n"
-
     if not files_list:
         text += "No files found for your query."
     else:
         for file in files_list:
-            payload = f"get_{encode_link(file['raw_link'])}"
+            payload = f"get_{file['file_unique_id']}"
             deep_link = f"https://t.me/{bot_username}?start={payload}"
             text += f"**File:** `{file['file_name']}`\n**Link:** [Click Here to Get File]({deep_link})\n\n"
-
     buttons = []
     nav_row = []
     encoded_query = base64.urlsafe_b64encode(search_query.encode()).decode().strip("=")
-
     if page > 1:
         nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"search_results_{page-1}_{encoded_query}"))
     if total_files > page * files_per_page:
@@ -181,7 +173,6 @@ async def _format_and_send_search_results(client, query, user_id, search_query, 
     if nav_row: buttons.append(nav_row)
     buttons.append([InlineKeyboardButton("📚 Back to Full List", callback_data="my_files_1")])
     buttons.append([InlineKeyboardButton("« Go Back to Settings", callback_data=f"go_back_{user_id}")])
-    
     await safe_edit_message(query, text=text, reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
 
 @Client.on_callback_query(filters.regex("search_my_files"))
@@ -190,16 +181,11 @@ async def search_my_files_prompt(client, query):
     try:
         prompt = await query.message.edit_text(
             "**🔍 Search Your Files**\n\nPlease send the name of the file you want to find.",
-            reply_markup=go_back_button(user_id)
-        )
+            reply_markup=go_back_button(user_id))
         response = await client.listen(chat_id=user_id, timeout=300, filters=filters.text)
         search_query = response.text
-        
         await response.delete()
-        
-        # This will edit the original prompt message to show the results
         await _format_and_send_search_results(client, query, user_id, search_query, 1)
-
     except asyncio.TimeoutError:
         await safe_edit_message(query, text="❗️ **Timeout:** Search cancelled.", reply_markup=go_back_button(user_id))
     except Exception as e:
@@ -227,28 +213,25 @@ async def backup_links_handler(client, query):
     user_id = query.from_user.id
     user = await get_user(user_id)
     post_channels = user.get('post_channels', [])
-    if not post_channels:
-        return await query.answer("You have not set any Post Channels yet.", show_alert=True)
+    if not post_channels: return await query.answer("You have not set any Post Channels yet.", show_alert=True)
     kb = []
     for ch_id in post_channels:
         try:
             chat = await client.get_chat(ch_id)
             kb.append([InlineKeyboardButton(chat.title, callback_data=f"start_backup_{ch_id}")])
-        except Exception: continue
-    if not kb:
-        return await query.answer("Could not access any of your Post Channels.", show_alert=True)
+        except: continue
+    if not kb: return await query.answer("Could not access any of your Post Channels.", show_alert=True)
     kb.append([InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")])
-    await safe_edit_message(query, text="**🔄 Smart Backup**\n\nSelect a channel. I will group all your files and post them with your current settings.", reply_markup=InlineKeyboardMarkup(kb))
+    await safe_edit_message(query, text="**🔄 Smart Backup**\n\nSelect a channel.", reply_markup=InlineKeyboardMarkup(kb))
 
 @Client.on_callback_query(filters.regex(r"start_backup_-?\d+"))
 async def start_backup_process(client, query):
     user_id = query.from_user.id
-    if user_id in ACTIVE_BACKUP_TASKS:
-        return await query.answer("A backup process is already running for you.", show_alert=True)
+    if user_id in ACTIVE_BACKUP_TASKS: return await query.answer("A backup process is already running.", show_alert=True)
     channel_id = int(query.data.split("_")[-1])
     ACTIVE_BACKUP_TASKS.add(user_id)
     try:
-        progress_msg = await query.message.edit_text("⏳ `Step 1/3:` Fetching all your file records...")
+        progress_msg = await query.message.edit_text("⏳ `Step 1/3:` Fetching file records...")
         all_files_cursor = await get_all_user_files(user_id)
         batches = {}
         async for file_doc in all_files_cursor:
@@ -260,11 +243,11 @@ async def start_backup_process(client, query):
         if total_batches == 0:
             return await safe_edit_message(query, text="You have no files to back up.", reply_markup=go_back_button(user_id))
         
-        await safe_edit_message(query, text=f"✅ `Step 2/3:` Found **{total_batches}** posts to create. Starting...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel Backup", callback_data=f"cancel_backup_{user_id}")]]))
+        await safe_edit_message(query, text=f"✅ `Step 2/3:` Found **{total_batches}** posts to create.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel Backup", callback_data=f"cancel_backup_{user_id}")]]))
         
         for i, (batch_key, file_docs) in enumerate(batches.items()):
             if user_id not in ACTIVE_BACKUP_TASKS:
-                await safe_edit_message(query, text="❌ Backup process has been cancelled.", reply_markup=go_back_button(user_id))
+                await safe_edit_message(query, text="❌ Backup cancelled.", reply_markup=go_back_button(user_id))
                 return
             try:
                 message_ids = [int(doc['raw_link'].split('/')[-1]) for doc in file_docs]
@@ -275,24 +258,17 @@ async def start_backup_process(client, query):
                 else: await client.send_message(channel_id, caption, reply_markup=footer, disable_web_page_preview=True)
                 
                 progress_text = f"🔄 `Step 3/3:` Progress: {i + 1} / {total_batches} posts created."
-                try:
-                    await progress_msg.edit_text(progress_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel Backup", callback_data=f"cancel_backup_{user_id}")]]))
-                except MessageNotModified:
-                    pass
-                except Exception as e:
-                    logger.warning(f"Could not edit backup progress message: {e}")
-                
+                await safe_edit_message(query, text=progress_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel Backup", callback_data=f"cancel_backup_{user_id}")]]))
                 await asyncio.sleep(3)
             except Exception as e:
                 logger.exception(f"Failed to post batch '{batch_key}' during backup.")
                 await client.send_message(user_id, f"Failed to post batch for `{batch_key}`. Error: {e}")
         
-        await progress_msg.delete()
-        await client.send_message(user_id, "✅ **Backup Complete!** All posts have been created.", reply_markup=go_back_button(user_id))
-
+        await query.message.delete()
+        await client.send_message(user_id, "✅ **Backup Complete!**", reply_markup=go_back_button(user_id))
     except Exception as e:
         logger.exception("Major error in backup process")
-        await safe_edit_message(query, text=f"A major error occurred during backup: {e}", reply_markup=go_back_button(user_id))
+        await safe_edit_message(query, text=f"A major error occurred: {e}", reply_markup=go_back_button(user_id))
     finally:
         ACTIVE_BACKUP_TASKS.discard(user_id)
 
@@ -302,7 +278,7 @@ async def cancel_backup_handler(client, query):
     if query.from_user.id != user_id: return await query.answer("This is not for you.", show_alert=True)
     if user_id in ACTIVE_BACKUP_TASKS:
         ACTIVE_BACKUP_TASKS.discard(user_id)
-        await query.answer("Cancellation signal sent. The process will stop after the current post.", show_alert=True)
+        await query.answer("Cancellation signal sent.", show_alert=True)
     else:
         await query.answer("No active backup process found.", show_alert=True)
 
@@ -329,13 +305,13 @@ async def add_footer_handler(client, query):
         await prompt_msg.edit_text(f"OK. Now, send the URL for the '{button_name_msg.text}' button.", reply_markup=go_back_button(user_id))
         button_url_msg = await client.listen(chat_id=user_id, timeout=300)
         if not button_url_msg.text.startswith(("http://", "https://")):
-            return await button_url_msg.reply("Invalid URL. Process cancelled.", reply_markup=go_back_button(user_id))
+            return await button_url_msg.reply("Invalid URL.", reply_markup=go_back_button(user_id))
         await add_footer_button(user_id, button_name_msg.text, button_url_msg.text)
         await button_name_msg.delete()
         await button_url_msg.delete()
-        await safe_edit_message(query, text="✅ New footer button added successfully!", reply_markup=go_back_button(user_id))
+        await safe_edit_message(query, text="✅ New footer button added!", reply_markup=go_back_button(user_id))
     except asyncio.TimeoutError:
-        await safe_edit_message(query, text="❗️ **Timeout:** Command cancelled.", reply_markup=go_back_button(user_id))
+        await safe_edit_message(query, text="❗️ **Timeout:** Cancelled.", reply_markup=go_back_button(user_id))
     except Exception as e:
         logger.exception("Error in add_footer_handler")
         await safe_edit_message(query, text=f"An error occurred: {e}", reply_markup=go_back_button(user_id))
@@ -360,13 +336,9 @@ async def manage_channels_handler(client, query):
     if channels:
         text += "Here are your connected channels. Click to remove."
         for ch_id in channels:
-            try:
-                chat = await client.get_chat(ch_id)
-                buttons.append([InlineKeyboardButton(f"❌ {chat.title}", callback_data=f"rm_{ch_type}_{ch_id}")])
-            except:
-                buttons.append([InlineKeyboardButton(f"❌ Unavailable ({ch_id})", callback_data=f"rm_{ch_type}_{ch_id}")])
-    else:
-        text += "You haven't added any channels yet."
+            try: chat = await client.get_chat(ch_id); buttons.append([InlineKeyboardButton(f"❌ {chat.title}", callback_data=f"rm_{ch_type}_{ch_id}")])
+            except: buttons.append([InlineKeyboardButton(f"❌ Unavailable ({ch_id})", callback_data=f"rm_{ch_type}_{ch_id}")])
+    else: text += "You haven't added any channels yet."
     buttons.append([InlineKeyboardButton("➕ Add New Channel", callback_data=f"add_{ch_type}_ch")])
     buttons.append([InlineKeyboardButton("« Go Back", callback_data=f"go_back_{user_id}")])
     await safe_edit_message(query, text=text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -395,33 +367,46 @@ async def add_channel_prompt(client, query):
         return await query.answer("You can only connect up to 3 Post Channels.", show_alert=True)
     question = None
     try:
-        question = await query.message.reply_text(
-            f"Forward a message from your target **{ch_type_name} Channel** to add it.",
-            reply_markup=go_back_button(user_id))
+        question = await query.message.reply_text(f"Forward a message from your target **{ch_type_name} Channel**.", reply_markup=go_back_button(user_id))
         response = await client.listen(chat_id=user_id, filters=filters.forwarded, timeout=300)
         if response.forward_from_chat:
             await add_to_list(user_id, ch_type_key, response.forward_from_chat.id)
             await response.reply_text(f"✅ Connected to **{response.forward_from_chat.title}**.", reply_markup=go_back_button(user_id))
-        else:
-            await response.reply_text("Not a valid forwarded message.", reply_markup=go_back_button(user_id))
+        else: await response.reply_text("Not a valid forwarded message.", reply_markup=go_back_button(user_id))
         await question.delete()
     except asyncio.TimeoutError:
-        if question: await safe_edit_message(question, text="Command timed out. Please try again.")
+        if question: await safe_edit_message(question, text="Command timed out.")
     except Exception as e:
         await query.message.reply_text(f"An error occurred: {e}", reply_markup=go_back_button(user_id))
 
 @Client.on_callback_query(filters.regex("^show_caption$"))
 async def show_caption_handler(client, query):
     user = await get_user(query.from_user.id)
-    caption = user.get('custom_caption', 'No custom caption set.')
+    caption = user.get('filename_url', 'No filename link has been set yet.')
     await query.answer(caption, show_alert=True, cache_time=0)
 
-@Client.on_callback_query(filters.regex(r"^(set_caption|set_fsub|set_download)$"))
-async def set_value_handler(client, query):
+@Client.on_callback_query(filters.regex("^set_filename_link$"))
+async def set_filename_link_handler(client, query):
     user_id = query.from_user.id
-    action = query.data.split('_', 1)[1]
+    try:
+        prompt = await query.message.edit_text("Please send the full URL you want your filenames to link to.", reply_markup=go_back_button(user_id))
+        response = await client.listen(chat_id=user_id, timeout=300, filters=filters.text)
+        if not response.text.startswith(("http://", "https://")):
+            return await response.reply("This is not a valid URL.", reply_markup=go_back_button(user_id))
+        await update_user(user_id, "filename_url", response.text)
+        await response.reply_text("✅ Filename link updated!", reply_markup=go_back_button(user_id))
+        await prompt.delete()
+    except asyncio.TimeoutError:
+        await safe_edit_message(query, text="❗️ **Timeout:** Cancelled.", reply_markup=go_back_button(user_id))
+    except:
+        logger.exception("Error in set_filename_link_handler")
+        await safe_edit_message(query, text="An error occurred.", reply_markup=go_back_button(user_id))
+
+@Client.on_callback_query(filters.regex("^(set_fsub|set_download)$"))
+async def set_other_links_handler(client, query):
+    user_id = query.from_user.id
+    action = query.data.split("_")[1]
     prompts = {
-        "caption": ("✍️ **Set Caption**\n\nSend your caption text.", "custom_caption"),
         "fsub": ("📢 **Set FSub**\n\nForward a message from your FSub channel.", "fsub_channel"),
         "download": ("❓ **Set 'How to Download'**\n\nSend your tutorial URL.", "how_to_download_link")
     }
@@ -435,10 +420,8 @@ async def set_value_handler(client, query):
         if action == "fsub":
             if not response.forward_from_chat: return await response.reply("Not a valid forwarded message.", reply_markup=go_back_button(user_id))
             value = response.forward_from_chat.id
-        elif action == "download":
+        else: # download
             if not response.text.startswith(("http://", "https://")): return await response.reply("Invalid URL.", reply_markup=go_back_button(user_id))
-            value = response.text
-        else: # caption
             value = response.text
         await update_user(user_id, key, value)
         await response.reply("✅ Settings updated!", reply_markup=go_back_button(user_id))
