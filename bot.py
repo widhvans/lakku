@@ -22,10 +22,10 @@ async def handle_redirect(request):
     if not file_unique_id:
         return web.Response(text="File ID missing.", status=400)
     try:
-        with open(Config.BOT_USERNAME_FILE, 'r') as f:
+        with open("bot_username.txt", 'r') as f:
             bot_username = f.read().strip().replace("@", "")
     except FileNotFoundError:
-        logger.error(f"FATAL: Bot username file not found at {Config.BOT_USERNAME_FILE}")
+        logger.error(f"FATAL: bot_username.txt not found!")
         return web.Response(text="Bot configuration error.", status=500)
     payload = f"get_{file_unique_id}"
     telegram_url = f"https://t.me/{bot_username}?start={payload}"
@@ -39,43 +39,22 @@ class Bot(Client):
             plugins=dict(root="handlers")
         )
         self.me = None
-        self.owner_db_channel_id = Config.OWNER_DATABASE_CHANNEL # Use ID from config
         self.web_app = None
         self.web_runner = None
         self.file_queue = asyncio.Queue()
         self.file_batch = {}
         self.batch_locks = {}
 
-    async def self_healing_check(self):
-        """
-        The smart "Auto-Discovery" method. Iterates through dialogs to find
-        and cache the Owner Database Channel, preventing PeerIdInvalid errors.
-        """
-        logger.info("Performing self-healing check for database channel...")
-        try:
-            await self.get_chat(self.owner_db_channel_id)
-            logger.info("Database channel is already known. Check passed.")
-            return True
-        except Exception:
-            logger.warning("Bot doesn't know the channel. Iterating through all my chats to find it...")
-            try:
-                async for dialog in self.get_dialogs():
-                    if dialog.chat and dialog.chat.id == self.owner_db_channel_id:
-                        logger.info(f"✅ Auto-Discovery successful! Found and cached channel: {dialog.chat.title}")
-                        return True
-                
-                logger.error(f"❌ FATAL ERROR: Auto-Discovery failed. I have looked through all my chats and I am not a member of the channel with ID {self.owner_db_channel_id}. Please make me an admin there.")
-                return False
-            except Exception as e:
-                logger.error(f"❌ FATAL ERROR during Auto-Discovery: {e}. Please check your configuration.")
-                return False
-
     async def file_processor_worker(self):
         logger.info("File processor worker started.")
         while True:
             try:
                 message_to_process, user_id = await self.file_queue.get()
-                copied_message = await message_to_process.copy(chat_id=self.owner_db_channel_id)
+                
+                # Directly use the ID from config, assuming it's correct.
+                # Error handling is now inside the new_file_handler.
+                copied_message = await message_to_process.copy(chat_id=Config.OWNER_DATABASE_CHANNEL)
+                
                 await save_file_data(owner_id=user_id, original_message=message_to_process, copied_message=copied_message)
                 filename = getattr(copied_message, copied_message.media.value).file_name
                 batch_key = get_batch_key(filename)
@@ -89,8 +68,11 @@ class Bot(Client):
                     else:
                         self.file_batch[user_id][batch_key].append(copied_message)
                 await asyncio.sleep(2)
-            except Exception:
+            except Exception as e:
                 logger.exception("Error in file processor worker")
+                try:
+                    await self.send_message(Config.ADMIN_ID, f"⚠️ **A critical error occurred in the file processor worker.**\n\n`{e}`\n\nThis is likely a problem with the Owner Database Channel setup. Please check my logs and your bot's admin status.")
+                except: pass
             finally:
                 self.file_queue.task_done()
 
@@ -132,22 +114,17 @@ class Bot(Client):
     async def start(self):
         await super().start()
         self.me = await self.get_me()
-        logger.info(f"Bot @{self.me.username} logged in.")
         
-        if not await self.self_healing_check():
-            logger.error("Shutting down due to critical configuration error.")
-            sys.exit()
-
         try:
-            with open(Config.BOT_USERNAME_FILE, 'w') as f:
+            with open("bot_username.txt", 'w') as f:
                 f.write(f"@{self.me.username}")
-            logger.info(f"Updated bot username to @{self.me.username} in {Config.BOT_USERNAME_FILE}")
+            logger.info(f"Updated bot username to @{self.me.username} in bot_username.txt")
         except Exception as e:
-            logger.error(f"Could not write to {Config.BOT_USERNAME_FILE}. Error: {e}")
+            logger.error(f"Could not write to bot_username.txt. Error: {e}")
         
         asyncio.create_task(self.file_processor_worker())
         await self.start_web_server()
-        logger.info(f"All services started successfully.")
+        logger.info(f"Bot @{self.me.username} and all services started successfully.")
 
     async def stop(self, *args):
         logger.info("Stopping bot and web server...")
