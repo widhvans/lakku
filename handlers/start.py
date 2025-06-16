@@ -4,21 +4,29 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant, MessageNotModified
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import Config
-from database.db import add_user, get_file_by_unique_id, get_user
+# --- FIX: Import the function to get the owner DB ID ---
+from database.db import add_user, get_file_by_unique_id, get_user, get_owner_db_channel
 from utils.helpers import get_main_menu, decode_link, encode_link
 from features.shortener import get_shortlink
 
 logger = logging.getLogger(__name__)
 
 async def send_file(client, user_id, file_unique_id):
+    """Helper function to send the final file using its unique_id."""
     try:
         file_data = await get_file_by_unique_id(file_unique_id)
         if not file_data:
             return await client.send_message(user_id, "Sorry, this file is no longer available.")
         
+        # --- FIX: Get the Owner DB ID from the database, not config ---
+        owner_db_id = await get_owner_db_channel()
+        if not owner_db_id:
+            logger.error("Owner DB Channel not set, cannot send file.")
+            return await client.send_message(user_id, "A configuration error occurred. Please contact the admin.")
+
         await client.copy_message(
             chat_id=user_id,
-            from_chat_id=Config.OWNER_DATABASE_CHANNEL,
+            from_chat_id=owner_db_id,
             message_id=file_data['file_id'],
             caption=f"✅ **Here is your file!**\n\n`{file_data.get('file_name', 'N/A')}`"
         )
@@ -47,14 +55,19 @@ async def start_command(client, message):
         text = (
             f"Hello {message.from_user.mention}! 👋\n\n"
             "I am your personal **File Storage & Auto-Posting Bot**.\n\n"
+            "✓ Save files to private channels.\n"
+            "✓ Auto-post them to public channels.\n"
+            "✓ Customize everything from captions to footers.\n\n"
             "Click the button below to begin!"
         )
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Let's Go 🚀", callback_data=f"go_back_{user_id}")]]))
 
 async def handle_file_request(client, message, user_id, payload):
+    """Contains the logic for FSub check and showing the shortener link."""
     file_unique_id = payload.split("_", 1)[1]
     file_data = await get_file_by_unique_id(file_unique_id)
     if not file_data: return await message.reply_text("File not found or link has expired.")
+    
     owner_id = file_data['owner_id']
     owner_settings = await get_user(owner_id)
     fsub_channel = owner_settings.get('fsub_channel')
@@ -67,19 +80,14 @@ async def handle_file_request(client, message, user_id, payload):
             except: invite_link = None
             buttons = [[InlineKeyboardButton("📢 Join Channel", url=invite_link)], [InlineKeyboardButton("🔄 Retry", callback_data=f"retry_{payload}")]]
             return await message.reply_text("You must join the channel to continue.", reply_markup=InlineKeyboardMarkup(buttons))
-        except ValueError as e:
-            if "Peer id invalid" in str(e):
-                logger.warning(f"FSub channel {fsub_channel} for owner {owner_id} is invalid. Self-healing...")
-                await client.get_chat(fsub_channel) # Self-heal
-                await handle_file_request(client, message, user_id, payload) # Retry the whole process
-                return
-            else: raise e # Re-raise other errors
     
     final_delivery_link = f"https://t.me/{client.me.username}?start=finalget_{file_unique_id}"
     shortened_link = await get_shortlink(final_delivery_link, owner_id)
+    
     buttons = [[InlineKeyboardButton("➡️ Click Here to Get Your File ⬅️", url=shortened_link)]]
     if owner_settings.get("how_to_download_link"):
         buttons.append([InlineKeyboardButton("❓ How to Download", url=owner_settings["how_to_download_link"])])
+
     await message.reply_text(
         "**Your file is almost ready!**\n\n"
         "1. Click the button above to complete the task.\n"
@@ -89,13 +97,17 @@ async def handle_file_request(client, message, user_id, payload):
 
 @Client.on_callback_query(filters.regex(r"^retry_"))
 async def retry_handler(client, query):
+    user_id = query.from_user.id
+    payload = query.data.split("_", 1)[1]
     await query.message.delete()
-    await handle_file_request(client, query.message, query.from_user.id, query.data.split("_", 1)[1])
+    # Create a mock message object to pass to the handler
+    query.message.command = ["start", payload]
+    await handle_file_request(client, query.message, user_id, payload)
 
 @Client.on_callback_query(filters.regex(r"go_back_"))
 async def go_back_callback(client, query):
     user_id = int(query.data.split("_")[-1])
-    if query.from_user.id != user_id: return
+    if query.from_user.id != user_id: return await query.answer("This is not for you!", show_alert=True)
     try:
         await query.message.edit_text("⚙️ Here are the main settings:", reply_markup=await get_main_menu(user_id))
     except MessageNotModified:
