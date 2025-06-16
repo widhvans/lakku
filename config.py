@@ -21,7 +21,7 @@ class Config:
     VPS_IP = os.environ.get("VPS_IP", "65.21.183.36")
     
     # --- PORT CHANGED TO 4040 AS REQUESTED ---
-    VPS_PORT = int(os.environ.get("VPS_PORT", 4040))
+    VPS_PORT = int(os.environ.get("VPS_PORT", 7071))
     
     # The name of the file that stores your bot's username
     BOT_USERNAME_FILE = "bot_username.txt"
